@@ -20,11 +20,11 @@ export default class Backend {
     return this.engine.getLampGraph();
   }
 
-  getAllLamps(): Array<{ id: string; street: string; connections: string[]; state: LampState }> {
+  getAllLamps(): Array<{ id: string; name?: string; street: string; connections: string[]; state: LampState }> {
     const graph = this.engine.getLampGraph();
     return graph.nodes.map((n) => {
       const l = (this.engine as any).lamps.get(n.id) as Lamp;
-      return { id: n.id, street: n.street, connections: [...l.connections], state: l.state };
+      return { id: n.id, name: l.name, street: n.street, connections: [...l.connections], state: l.state };
     });
   }
 

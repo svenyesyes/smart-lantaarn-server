@@ -8,6 +8,7 @@ export type LampState = {
 
 export type Lamp = {
   id: string;
+  name?: string;
   street: string;
   connections: string[];
   state: LampState;
@@ -48,6 +49,7 @@ export class LampEngine {
       // Defensive copy
       const copy: Lamp = {
         id: lamp.id,
+        name: lamp.name,
         street: lamp.street,
         connections: [...lamp.connections],
         state: { ...lamp.state },

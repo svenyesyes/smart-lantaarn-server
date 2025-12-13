@@ -51,6 +51,29 @@ app.get("/graph", (_req: Request, res: Response) => {
 app.get("/lamps", (_req: Request, res: Response) => {
   res.json(backend.getAllLamps());
 });
+
+// Update lamp metadata (name, street, connections). ID is immutable.
+app.post("/lamps/:lampId/update", (req: Request, res: Response) => {
+  const lampId = req.params.lampId;
+  const { name, street, connections } = req.body || {};
+  const l = (engine as any).lamps.get(lampId) as Lamp | undefined;
+  if (!l) { res.status(404).json({ ok: false, error: "Lamp not found" }); return; }
+  if (typeof name === "string") (l as any).name = name;
+  if (typeof street === "string") (l as any).street = street;
+  if (Array.isArray(connections)) (l as any).connections = connections.filter((x: any) => typeof x === "string");
+  (engine as any).lamps.set(lampId, l);
+  // Persist to settings.json
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const json = JSON.parse(raw);
+    if (Array.isArray(json.lamps)) {
+      json.lamps = json.lamps.map((itm: any) => itm.id === lampId ? { ...itm, name: l.name, street: l.street, connections: l.connections } : itm);
+      fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
+    }
+  } catch {}
+  broadcastLampStates();
+  res.json({ ok: true });
+});
 app.post("/positions", (req: Request, res: Response) => {
   try {
     const body = req.body as Record<string, { x: number; y: number }>;
@@ -158,4 +181,47 @@ function setPositions(p: Record<string, { x: number; y: number }>) {
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 server.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
+});
+
+// Separate WebSocket for lamps on port 3090
+const lampServer = http.createServer();
+const lampWss = new WebSocketServer({ server: lampServer });
+const LAMP_WS_PORT = 3090;
+
+type LampClient = { id: string; ws: WebSocket };
+const lampClients: Map<string, LampClient> = new Map();
+
+lampWss.on("connection", (ws: WebSocket) => {
+  ws.on("message", (raw: Buffer) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg && msg.type === "register" && typeof msg.id === "string") {
+        const id = msg.id;
+        lampClients.set(id, { id, ws });
+        ws.send(JSON.stringify({ type: "registered", id }));
+        return;
+      }
+      if (msg && msg.type === "state" && typeof msg.id === "string" && msg.state) {
+        // optional: accept state updates from lamp devices
+        // update engine state for this lamp if known
+        const l = (engine as any).lamps.get(msg.id) as Lamp | undefined;
+        if (l) {
+          const { on, brightness, color } = msg.state;
+          engine.setLampState(msg.id, { on, brightness, color });
+          broadcastLampStates();
+        }
+        return;
+      }
+    } catch {}
+  });
+  ws.on("close", () => {
+    // remove any mapping referencing this ws
+    for (const [id, client] of lampClients.entries()) {
+      if (client.ws === ws) lampClients.delete(id);
+    }
+  });
+});
+
+lampServer.listen(LAMP_WS_PORT, () => {
+  console.log(`Lamp WebSocket listening on ws://localhost:${LAMP_WS_PORT}`);
 });

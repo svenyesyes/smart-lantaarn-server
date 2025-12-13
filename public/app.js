@@ -6,6 +6,15 @@
     const popupCloseBtn = document.getElementById('popupCloseBtn');
     const canvas = document.getElementById('graphCanvas');
     const ctx = canvas.getContext('2d');
+    const configureBtn = document.getElementById('configureBtn');
+    const configOverlay = document.getElementById('configOverlay');
+    const cfgId = document.getElementById('cfgId');
+    const cfgStreet = document.getElementById('cfgStreet');
+    const cfgName = document.getElementById('cfgName');
+    const cfgRegisterBtn = document.getElementById('cfgRegisterBtn');
+    const cfgCloseBtn = document.getElementById('cfgCloseBtn');
+    const cfgStatus = document.getElementById('cfgStatus');
+    const cfgList = document.getElementById('cfgList');
 
     function resizeCanvas() {
         canvas.width = canvas.clientWidth;
@@ -13,11 +22,119 @@
         render();
     }
     window.addEventListener('resize', resizeCanvas);
+    // Lamp configuration overlay
+    if (configureBtn) configureBtn.addEventListener('click', () => {
+        if (configOverlay) configOverlay.classList.remove('hidden');
+        // prefill id with random hex 8
+        if (cfgId) cfgId.value = generateHexId();
+        renderLampList();
+    });
+    if (cfgCloseBtn) cfgCloseBtn.addEventListener('click', () => {
+        if (configOverlay) configOverlay.classList.add('hidden');
+    });
+    let lampWS;
+    function ensureLampWS() {
+        if (lampWS && lampWS.readyState === WebSocket.OPEN) return;
+        lampWS = new WebSocket(`ws://${location.hostname}:3090`);
+        lampWS.onopen = () => { /* ready */ };
+        lampWS.onmessage = (ev) => {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === 'registered') {
+                    cfgStatus.textContent = `Registered lamp ${msg.id}`;
+                }
+            } catch {}
+        };
+        lampWS.onclose = () => { /* reconnect on next action */ };
+    }
+    if (cfgRegisterBtn) cfgRegisterBtn.addEventListener('click', () => {
+        ensureLampWS();
+        const id = (cfgId && cfgId.value || '').trim();
+        const name = (cfgName && cfgName.value || '').trim();
+        const street = (cfgStreet && cfgStreet.value || '').trim();
+        if (!id) { cfgStatus.textContent = 'ID is required'; return; }
+        // send register to lamp WS
+        const payload = { type: 'register', id, name };
+        try { lampWS.send(JSON.stringify(payload)); } catch {}
+        // optionally add to server-side model (future: endpoint to add new lamp)
+        cfgStatus.textContent = `Sent register for ${id}`;
+        renderLampList();
+    });
+
+    function generateHexId(){
+        let s = '';
+        for (let i=0;i<8;i++){ s += Math.floor(Math.random()*16).toString(16); }
+        return s;
+    }
+
+    async function renderLampList(){
+        if (!cfgList) return;
+        cfgList.innerHTML = 'Loading lamps…';
+        try {
+            const res = await fetch('/lamps');
+            const lamps = await res.json();
+            const assigned = lamps.filter(l => l.street && l.street.length);
+            const unassigned = lamps.filter(l => !l.street || !l.street.length);
+            const renderRows = (list) => list.map(l => {
+                const connStr = (l.connections||[]).join(', ');
+                const rowId = `row-${l.id}`;
+                return `<div class="lamp-row" id="${rowId}">
+                    <div><strong>${l.name || '(no name)'}<br/><span style="color:#666;font-size:12px;">${l.id}</span></strong></div>
+                    <div><input data-id="${l.id}" class="inp-street" value="${l.street || ''}" placeholder="Street"/></div>
+                    <div><input data-id="${l.id}" class="inp-connections" value="${connStr}" placeholder="conn1, conn2"/></div>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <input data-id="${l.id}" class="inp-name" value="${l.name || ''}" placeholder="Name" style="width:120px;"/>
+                        <button class="btn-save" data-id="${l.id}">Save</button>
+                    </div>
+                </div>`;
+            }).join('');
+            cfgList.innerHTML = `
+                <h3 style="margin:8px 0;">Unassigned</h3>
+                <div class="lamp-row" style="font-weight:600;">
+                    <div>Name / ID</div><div>Street</div><div>Connections</div><div>Actions</div>
+                </div>
+                ${renderRows(unassigned)}
+                <h3 style="margin:16px 0 8px;">Assigned</h3>
+                <div class="lamp-row" style="font-weight:600;">
+                    <div>Name / ID</div><div>Street</div><div>Connections</div><div>Actions</div>
+                </div>
+                ${renderRows(assigned)}
+            `;
+
+            // bind save buttons
+            cfgList.querySelectorAll('.btn-save').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.getAttribute('data-id');
+                    const street = cfgList.querySelector(`.inp-street[data-id="${id}"]`).value.trim();
+                    const name = cfgList.querySelector(`.inp-name[data-id="${id}"]`).value.trim();
+                    const conns = cfgList.querySelector(`.inp-connections[data-id="${id}"]`).value.trim();
+                    const connections = conns ? conns.split(',').map(s => s.trim()).filter(Boolean) : [];
+                    try {
+                        const res = await fetch(`/lamps/${encodeURIComponent(id)}/update`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name, street, connections })
+                        });
+                        if (res.ok) {
+                            cfgStatus.textContent = `Saved ${id}`;
+                            renderLampList();
+                        } else {
+                            cfgStatus.textContent = `Failed to save ${id}`;
+                        }
+                    } catch {
+                        cfgStatus.textContent = `Error saving ${id}`;
+                    }
+                });
+            });
+        } catch {
+            cfgList.innerHTML = 'Failed to load lamps';
+        }
+    }
 
     let graph = { nodes: [], edges: [] };
     let states = [];
     let positions = new Map();
     let rects = new Map();
+    let lampNames = new Map();
     let selectedLampId = null;
     let pan = { x: 0, y: 0 };
     let isPanning = false;
@@ -48,7 +165,27 @@
             if (!res.ok) return false;
             const obj = await res.json();
             if (!obj || typeof obj !== 'object') return false;
-            positions = new Map(Object.entries(obj).map(([id, p]) => [id, p]));
+            // If positions are keyed by old names, map them to current hex IDs
+            const entries = Object.entries(obj);
+            const idsInGraph = new Set(graph.nodes.map(n => n.id));
+            const looksLikeHexId = (s) => typeof s === 'string' && /^[0-9a-f]{8}$/i.test(s);
+            let needNameMapping = entries.some(([k]) => !looksLikeHexId(k) || !idsInGraph.has(k));
+            let mapped = new Map();
+            if (needNameMapping) {
+                try {
+                    const lamps = await (await fetch('/lamps')).json();
+                    const nameToId = new Map(lamps.filter(l => l.name).map(l => [l.name, l.id]));
+                    entries.forEach(([k, p]) => {
+                        const id = nameToId.get(k) || k;
+                        mapped.set(id, p);
+                    });
+                } catch {
+                    mapped = new Map(entries.map(([id, p]) => [id, p]));
+                }
+            } else {
+                mapped = new Map(entries.map(([id, p]) => [id, p]));
+            }
+            positions = mapped;
             // build rects
             rects = new Map();
             const blockW = 48, blockH = 32;
@@ -205,7 +342,7 @@
             // label inside node
             ctx.fillStyle = '#333';
             ctx.font = '12px system-ui';
-            const text = n.id;
+            const text = lampNames.get(n.id) || n.id;
             const metrics = ctx.measureText(text);
             const tx = x + (rect.w - metrics.width) / 2;
             const ty = y + (rect.h + 12) / 2 - 2;
@@ -216,6 +353,11 @@
     async function refreshGraph() {
         const res = await fetch('/graph');
         graph = await res.json();
+        // load names for display
+        try {
+            const lamps = await (await fetch('/lamps')).json();
+            lampNames = new Map(lamps.map(l => [l.id, l.name || '']));
+        } catch { lampNames = new Map(); }
         // Load positions, then render
         await loadPositions();
         render();
