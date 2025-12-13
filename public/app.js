@@ -129,7 +129,7 @@
                 positions.set(id, { x, y });
             });
         }
-
+        
         // rects
         rects = new Map();
         const blockW = 48, blockH = 32;
@@ -158,7 +158,7 @@
             const a = positions.get(e.from);
             const b = positions.get(e.to);
             if (!a || !b) return;
-            ctx.strokeStyle = e.type === 'same_street' ? '#ff6b6b' : '#2ecc71';
+            ctx.strokeStyle = e.type === 'same_street' ? '#747474ff' : '#398ed3ff';
             ctx.beginPath();
             ctx.moveTo(a.x + pan.x, a.y + pan.y);
             ctx.lineTo(b.x + pan.x, b.y + pan.y);
