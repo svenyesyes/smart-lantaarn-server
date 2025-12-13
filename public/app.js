@@ -15,9 +15,9 @@
   window.addEventListener('resize', resizeCanvas);
 
   let graph = { nodes: [], edges: [] };
-  let states = []; // [{id, state}]
-  let positions = new Map(); // id -> {x,y}
-  let rects = new Map(); // id -> {x,y,w,h}
+  let states = [];
+  let positions = new Map();
+  let rects = new Map();
   let selectedLampId = null;
   let pan = { x: 0, y: 0 };
   let isPanning = false;
@@ -27,7 +27,7 @@
   if (dragModeEl) {
     dragModeEl.addEventListener('change', () => {
       dragMode = !!dragModeEl.checked;
-      // Close any popup when entering drag mode
+      // Close popup when entering drag mode
       if (dragMode && !popup.classList.contains('hidden')) {
         popup.classList.add('hidden');
         selectedLampId = null;
@@ -49,7 +49,7 @@
       const obj = await res.json();
       if (!obj || typeof obj !== 'object') return false;
       positions = new Map(Object.entries(obj).map(([id, p]) => [id, p]));
-      // build rects immediately
+      // build rects
       rects = new Map();
       const blockW = 24, blockH = 16;
       positions.forEach((p, id) => {
@@ -59,13 +59,13 @@
     } catch { return false; }
   }
 
-  // Force-directed layout to automatically align by connections (simple physics)
+  // Simple force-directed layout
   function layoutPositions(){
     const padding = 60;
     const width = canvas.width - padding*2;
     const height = canvas.height - padding*2;
 
-    // Initialize positions deterministically by street grouping, then relax
+    // Initialize by street grouping, then relax
     const streets = Array.from(new Set(graph.nodes.map(n => n.street)));
     const streetIndex = new Map(streets.map((s,i)=>[s,i]));
     const laneCount = Math.max(1, streets.length);
@@ -87,12 +87,12 @@
       });
     });
 
-    // Apply a few iterations of force relaxation based on edges
+    // Relax positions based on edges
     const iterations = 150;
-    const k = 0.02; // spring strength
-    const repulsion = 4000; // node repulsion
+    const k = 0.02;
+    const repulsion = 4000;
     for (let it=0; it<iterations; it++) {
-      // repulsion between nodes
+      // node repulsion
       for (let i=0; i<graph.nodes.length; i++){
         const a = graph.nodes[i];
         const pa = positions.get(a.id);
@@ -112,7 +112,7 @@
         }
         positions.set(a.id, { x: pa.x + fx, y: pa.y + fy });
       }
-      // springs for edges
+      // edge springs
       graph.edges.forEach(e => {
         const a = positions.get(e.from);
         const b = positions.get(e.to);
@@ -122,7 +122,7 @@
         positions.set(e.from, { x: a.x + fx, y: a.y + fy });
         positions.set(e.to, { x: b.x - fx, y: b.y - fy });
       });
-      // keep inside padding bounds
+      // keep within bounds
       positions.forEach((p, id) => {
         const x = Math.max(padding, Math.min(canvas.width - padding, p.x));
         const y = Math.max(padding, Math.min(canvas.height - padding, p.y));
@@ -130,7 +130,7 @@
       });
     }
 
-    // rects for hit testing
+    // rects
     rects = new Map();
     const blockW = 24, blockH = 16;
     positions.forEach((p, id) => {
@@ -143,14 +143,16 @@
   function render(){
     if (!ctx) return;
     ctx.clearRect(0,0,canvas.width,canvas.height);
+    // Move dots grid with pan
+    try {
+      canvas.style.backgroundPosition = `${pan.x}px ${pan.y}px`;
+    } catch {}
     if (!positions || positions.size !== graph.nodes.length) {
-      // Attempt to load shared positions from server
-      // Note: render() is sync; we cannot await here, so we optimistically draw,
-      // and refreshGraph() triggers render after positions load.
+      // Try loading positions from server if missing
       layoutPositions();
     }
 
-    // draw edges
+    // edges
     ctx.lineWidth = 2;
     graph.edges.forEach(e => {
       const a = positions.get(e.from);
@@ -163,7 +165,7 @@
       ctx.stroke();
     });
 
-    // draw nodes as blocks
+    // nodes
     graph.nodes.forEach(n => {
       const rect = rects.get(n.id);
       if (!rect) return;
@@ -184,14 +186,14 @@
   async function refreshGraph(){
     const res = await fetch('/graph');
     graph = await res.json();
-    // Load shared positions, then render
+    // Load positions, then render
     await loadPositions();
     render();
   }
 
-  // no depth slider/control: use default depth
+  // default depth
 
-  // Mouse interactions: drag nodes, pan canvas, click to open popup
+  // Mouse: drag, pan, click
   canvas.addEventListener('mousedown', (ev) => {
     const rect = canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
@@ -206,12 +208,12 @@
     });
     if (hitId) {
       if (dragMode) {
-        // begin dragging only in drag mode
+        // begin dragging in drag mode
         drag.id = hitId;
         drag.startX = x - (positions.get(hitId)?.x || 0) - pan.x;
         drag.startY = y - (positions.get(hitId)?.y || 0) - pan.y;
       } else {
-        // not in drag mode: open popup immediately
+        // open popup
         selectedLampId = hitId;
         showPopupForLamp(hitId);
         render();
@@ -228,7 +230,7 @@
     if (drag.id) {
       const nx = x - drag.startX - pan.x;
       const ny = y - drag.startY - pan.y;
-      // snap to grid when in drag mode
+      // grid snap in drag mode
       const grid = 20;
       const sx = dragMode ? Math.round(nx / grid) * grid : nx;
       const sy = dragMode ? Math.round(ny / grid) * grid : ny;
@@ -248,7 +250,7 @@
 
   canvas.addEventListener('mouseup', () => {
     if (drag.id) {
-      // Only save positions in drag mode
+      // Save only in drag mode
       if (dragMode) {
         savePositions();
       }
@@ -281,29 +283,62 @@
     render();
   });
 
-  // Activate from popup: show preview (no hover required), then trigger activation
+  // Simulate locally using preview
   popupActivateBtn.addEventListener('click', async () => {
     if (!selectedLampId) return;
     const street = graph.nodes.find(n=>n.id===selectedLampId)?.street;
     if (!street) return;
-    const depth = 1; // default spillover depth without UI control
-    const res = await fetch(`/streets/${encodeURIComponent(street)}/preview?depth=${depth}`);
+    // touch settings for consistency
+    try { await fetch('/settings'); } catch {}
+    const res = await fetch(`/streets/${encodeURIComponent(street)}/preview`);
     const data = await res.json();
     const ids = new Set(data.affectedLampIds);
-    // Show preview highlight by increasing brightness temporarily
-    const backup = states.slice();
-    states = states.map(s => ids.has(s.id) ? { id: s.id, state: { ...s.state, brightness: Math.max(s.state.brightness, 70) } } : s);
+
+    // Pulse for 5s, then restore
+    const SIM_COLOR_A = '#ffd166';
+    const SIM_COLOR_B = '#ffb703';
+    const PULSE_MS = 5000;
+    const STEP_MS = 200;
+
+    // Capture originals
+    const original = new Map();
+    states.forEach(s => { if (ids.has(s.id)) original.set(s.id, { ...s.state }); });
+
+    // Initial on-state
+    states = states.map(s => ids.has(s.id)
+      ? { id: s.id, state: { ...s.state, on: true, brightness: Math.max(s.state.brightness, 60), color: SIM_COLOR_A } }
+      : s
+    );
     render();
 
-    // Immediately perform activation; server will broadcast final states
-    const payload = { on: true, brightness: 70, color: '#ffd166', spilloverDepth: depth };
-    await fetch(`/streets/${encodeURIComponent(street)}/activate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    // Clear existing timers
+    if (window.__lampPulseTimer) { clearInterval(window.__lampPulseTimer); window.__lampPulseTimer = null; }
+    if (window.__lampPulseTimeout) { clearTimeout(window.__lampPulseTimeout); window.__lampPulseTimeout = null; }
 
-    // Restore local state; websocket update will set the new actual states
-    states = backup;
+    let toggle = false;
+    window.__lampPulseTimer = setInterval(() => {
+      toggle = !toggle;
+      const targetBrightness = toggle ? 95 : 60;
+      const targetColor = toggle ? SIM_COLOR_B : SIM_COLOR_A;
+      states = states.map(s => ids.has(s.id)
+        ? { id: s.id, state: { ...s.state, on: true, brightness: targetBrightness, color: targetColor } }
+        : s
+      );
+      render();
+    }, STEP_MS);
+
+    window.__lampPulseTimeout = setTimeout(() => {
+      if (window.__lampPulseTimer) { clearInterval(window.__lampPulseTimer); window.__lampPulseTimer = null; }
+      // Restore originals
+      states = states.map(s => original.has(s.id)
+        ? { id: s.id, state: original.get(s.id) }
+        : s
+      );
+      render();
+    }, PULSE_MS);
   });
 
-  // WebSocket updates
+  // WebSocket
   let ws;
   function connectWS(){
     ws = new WebSocket(`ws://${location.host}`);
@@ -313,7 +348,7 @@
         if (msg.type === 'init') {
           graph = msg.graph || graph;
           states = msg.states || states;
-          // If server provided positions, use them immediately
+          // Use server positions if provided
           if (msg.positions) {
             positions = new Map(Object.entries(msg.positions).map(([id, p]) => [id, p]));
             // rebuild rects
@@ -344,7 +379,7 @@
     ws.onclose = () => setTimeout(connectWS, 1000);
   }
 
-  // initial
+  // init
   resizeCanvas();
   refreshGraph();
   connectWS();

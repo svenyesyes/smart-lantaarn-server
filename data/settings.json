@@ -1,19 +1,176 @@
 {
-  "lamps": [
-    { "id": "M1", "street": "Main", "connections": ["M2", "S1"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "M2", "street": "Main", "connections": ["M1", "M3"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "M3", "street": "Main", "connections": ["M2", "M4", "S2"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "M4", "street": "Main", "connections": ["M3", "M5"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "M5", "street": "Main", "connections": ["M4", "T2"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-
-    { "id": "S1", "street": "Second", "connections": ["M1", "S2"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "S2", "street": "Second", "connections": ["S1", "S3", "M3"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "S3", "street": "Second", "connections": ["S2", "S4"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "S4", "street": "Second", "connections": ["S3", "T1"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-
-    { "id": "T1", "street": "Third", "connections": ["S4", "T2"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "T2", "street": "Third", "connections": ["T1", "T3", "M5"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "T3", "street": "Third", "connections": ["T2", "T4"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } },
-    { "id": "T4", "street": "Third", "connections": ["T3"], "state": { "on": false, "brightness": 0, "color": "#ffffff" } }
-  ]
+    "spilloverDepth": 1,
+    "lamps": [
+        {
+            "id": "M1",
+            "street": "Main",
+            "connections": [
+                "M2",
+                "S1"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "M2",
+            "street": "Main",
+            "connections": [
+                "M1",
+                "M3"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "M3",
+            "street": "Main",
+            "connections": [
+                "M2",
+                "M4",
+                "S2"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "M4",
+            "street": "Main",
+            "connections": [
+                "M3",
+                "M5"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "M5",
+            "street": "Main",
+            "connections": [
+                "M4",
+                "T2"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "S1",
+            "street": "Second",
+            "connections": [
+                "M1",
+                "S2"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "S2",
+            "street": "Second",
+            "connections": [
+                "S1",
+                "S3",
+                "M3"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "S3",
+            "street": "Second",
+            "connections": [
+                "S2",
+                "S4"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "S4",
+            "street": "Second",
+            "connections": [
+                "S3",
+                "T1"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "T1",
+            "street": "Third",
+            "connections": [
+                "S4",
+                "T2"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "T2",
+            "street": "Third",
+            "connections": [
+                "T1",
+                "T3",
+                "M5"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "T3",
+            "street": "Third",
+            "connections": [
+                "T2",
+                "T4"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        },
+        {
+            "id": "T4",
+            "street": "Third",
+            "connections": [
+                "T3"
+            ],
+            "state": {
+                "on": false,
+                "brightness": 0,
+                "color": "#ffffff"
+            }
+        }
+    ]
 }

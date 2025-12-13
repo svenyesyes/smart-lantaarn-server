@@ -9,26 +9,24 @@ import fs from "fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load lamps from JSON settings (compatible with Node ESM without import attributes)
+// Load lamps from JSON settings
 const settingsPath = path.join(__dirname, "../data/settings.json");
 const settingsRaw = fs.readFileSync(settingsPath, "utf-8");
-const settings = JSON.parse(settingsRaw) as { lamps: Lamp[] };
+const settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; spilloverDepth?: number };
 const lamps: Lamp[] = settings.lamps;
+const SPILLOVER_DEPTH: number = typeof settings.spilloverDepth === "number" ? settings.spilloverDepth : 0;
 
 const engine = new LampEngine(lamps);
 
 const app = express();
 app.use(express.json());
 
-// Static frontend
 const publicDir = path.join(__dirname, "../public");
 app.use(express.static(publicDir));
 
-// REST: GET /graph
 app.get("/graph", (_req: Request, res: Response) => {
   res.json(engine.getLampGraph());
 });
-// Optional: save client-side positions (persist to file)
 app.post("/positions", (req: Request, res: Response) => {
   try {
     const body = req.body as Record<string, { x: number; y: number }>;
@@ -43,42 +41,40 @@ app.get("/positions", (_req: Request, res: Response) => {
   res.json(positionsCache);
 });
 
-// REST: POST /streets/:streetId/activate
 app.post("/streets/:streetId/activate", (req: Request, res: Response) => {
   const streetId = req.params.streetId;
-  const { on, brightness, color, spilloverDepth } = req.body || {};
+  const { on, brightness, color } = req.body || {};
   const opts: ActivateStreetOptions = {
     on: Boolean(on),
     brightness: brightness !== undefined ? Number(brightness) : undefined,
     color: typeof color === "string" ? color : undefined,
-    spilloverDepth: Number(spilloverDepth) || 0,
+    spilloverDepth: SPILLOVER_DEPTH,
   };
 
   engine.activateStreet(streetId, opts);
 
-  // Broadcast latest lamp states
   broadcastLampStates();
 
   res.json({ ok: true, events: engine.getEvents() });
 });
 
-// REST: GET /streets/:streetId/preview?depth=N
 app.get("/streets/:streetId/preview", (req: Request, res: Response) => {
   const streetId = req.params.streetId;
-  const depth = Number(req.query.depth) || 0;
-  const ids = engine.previewStreetActivation(streetId, depth);
-  res.json({ affectedLampIds: ids });
+  const ids = engine.previewStreetActivation(streetId, SPILLOVER_DEPTH);
+  res.json({ affectedLampIds: ids, spilloverDepth: SPILLOVER_DEPTH });
 });
 
-// Root -> index.html
 app.get("/", (_req: Request, res: Response) => {
   res.sendFile(path.join(publicDir, "index.html"));
+});
+
+app.get("/settings", (_req: Request, res: Response) => {
+  res.json({ spilloverDepth: SPILLOVER_DEPTH });
 });
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Shared positions persistence (across clients)
 let positionsCache: Record<string, { x: number; y: number }> = {};
 const positionsPath = path.join(__dirname, "../data/positions.json");
 try {
@@ -87,15 +83,12 @@ try {
 } catch {}
 
 wss.on("connection", (ws: WebSocket) => {
-  // Send initial states + positions
   ws.send(
     JSON.stringify({ type: "init", graph: engine.getLampGraph(), states: getAllLampStates(), positions: positionsCache })
   );
 });
 
 function getAllLampStates() {
-  // Export minimal state snapshot
-  // engine doesn't expose lamps publicly; we can reconstruct from graph and ask current state via internal map using type cast.
   const graph = engine.getLampGraph();
   return graph.nodes.map((n) => {
     const l = (engine as any).lamps.get(n.id) as Lamp;
