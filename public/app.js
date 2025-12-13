@@ -187,7 +187,9 @@
             const x = rect.x + pan.x, y = rect.y + pan.y;
             const radius = 6;
             drawRoundedRectPath(x, y, rect.w, rect.h, radius);
-            ctx.fillStyle = '#ffffff';
+            // fill node with current lamp color
+            const state = states.find(s => s.id === n.id)?.state;
+            ctx.fillStyle = (state && state.color) ? state.color : '#ffffff';
             ctx.fill();
             // base stroke style
             let stroke = isSelected ? '#60a5fa' : '#9ca3af';

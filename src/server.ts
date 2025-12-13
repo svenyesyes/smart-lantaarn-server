@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import LampEngine, { Lamp, ActivateStreetOptions } from "./LampEngine.js";
+import Backend from "./backend.js";
 import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +37,7 @@ function getSettingsCached() {
 }
 
 const engine = new LampEngine(lamps);
+const backend = new Backend(engine, SPILLOVER_DEPTH);
 
 const app = express();
 app.use(express.json());
@@ -44,7 +46,10 @@ const publicDir = path.join(__dirname, "../public");
 app.use(express.static(publicDir));
 
 app.get("/graph", (_req: Request, res: Response) => {
-  res.json(engine.getLampGraph());
+  res.json(backend.getGraph());
+});
+app.get("/lamps", (_req: Request, res: Response) => {
+  res.json(backend.getAllLamps());
 });
 app.post("/positions", (req: Request, res: Response) => {
   try {
@@ -63,14 +68,15 @@ app.get("/positions", (_req: Request, res: Response) => {
 app.post("/streets/:streetId/activate", (req: Request, res: Response) => {
   const streetId = req.params.streetId;
   const { on, brightness, color } = req.body || {};
-  const opts: ActivateStreetOptions = {
-    on: Boolean(on),
+  const spillParam = req.query.spillover;
+  const spillover = spillParam === undefined ? undefined : String(spillParam).toLowerCase() !== "false";
+
+  backend.activateStreet(streetId, {
+    on: on !== undefined ? Boolean(on) : undefined,
     brightness: brightness !== undefined ? Number(brightness) : undefined,
     color: typeof color === "string" ? color : undefined,
-    spilloverDepth: SPILLOVER_DEPTH,
-  };
-
-  engine.activateStreet(streetId, opts);
+    spillover,
+  });
 
   broadcastLampStates();
 
@@ -79,8 +85,22 @@ app.post("/streets/:streetId/activate", (req: Request, res: Response) => {
 
 app.get("/streets/:streetId/preview", (req: Request, res: Response) => {
   const streetId = req.params.streetId;
-  const ids = engine.previewStreetActivation(streetId, SPILLOVER_DEPTH);
-  res.json({ affectedLampIds: ids, spilloverDepth: SPILLOVER_DEPTH });
+  const spillParam = req.query.spillover;
+  const spillover = spillParam === undefined ? undefined : String(spillParam).toLowerCase() !== "false";
+  const ids = backend.previewStreetActivation(streetId, spillover);
+  res.json({ affectedLampIds: ids, spilloverDepth: spillover === false ? 0 : SPILLOVER_DEPTH });
+});
+
+app.post("/lamps/:lampId/color", (req: Request, res: Response) => {
+  const lampId = req.params.lampId;
+  const { color, mode } = req.body || {};
+  if (typeof color !== "string") {
+    res.status(400).json({ ok: false, error: "color is required" });
+    return;
+  }
+  backend.setLampColor(lampId, color, typeof mode === "string" ? mode : undefined);
+  broadcastLampStates();
+  res.json({ ok: true });
 });
 
 app.get("/", (_req: Request, res: Response) => {
