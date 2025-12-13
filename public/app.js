@@ -3,6 +3,7 @@
     const popupTitle = document.getElementById('popupTitle');
     const popupBody = document.getElementById('popupBody');
     const popupActivateBtn = document.getElementById('popupActivateBtn');
+    const popupIdentifyBtn = document.getElementById('popupIdentifyBtn');
     const popupCloseBtn = document.getElementById('popupCloseBtn');
     const canvas = document.getElementById('graphCanvas');
     const ctx = canvas.getContext('2d');
@@ -43,7 +44,7 @@
                 if (msg.type === 'registered') {
                     cfgStatus.textContent = `Registered lamp ${msg.id}`;
                 }
-            } catch {}
+            } catch { }
         };
         lampWS.onclose = () => { /* reconnect on next action */ };
     }
@@ -55,19 +56,19 @@
         if (!id) { cfgStatus.textContent = 'ID is required'; return; }
         // send register to lamp WS
         const payload = { type: 'register', id, name };
-        try { lampWS.send(JSON.stringify(payload)); } catch {}
+        try { lampWS.send(JSON.stringify(payload)); } catch { }
         // optionally add to server-side model (future: endpoint to add new lamp)
         cfgStatus.textContent = `Sent register for ${id}`;
         renderLampList();
     });
 
-    function generateHexId(){
+    function generateHexId() {
         let s = '';
-        for (let i=0;i<8;i++){ s += Math.floor(Math.random()*16).toString(16); }
+        for (let i = 0; i < 8; i++) { s += Math.floor(Math.random() * 16).toString(16); }
         return s;
     }
 
-    async function renderLampList(){
+    async function renderLampList() {
         if (!cfgList) return;
         cfgList.innerHTML = 'Loading lamps…';
         try {
@@ -76,7 +77,7 @@
             const assigned = lamps.filter(l => l.street && l.street.length);
             const unassigned = lamps.filter(l => !l.street || !l.street.length);
             const renderRows = (list) => list.map(l => {
-                const connStr = (l.connections||[]).join(', ');
+                const connStr = (l.connections || []).join(', ');
                 const rowId = `row-${l.id}`;
                 return `<div class="lamp-row" id="${rowId}">
                     <div><strong>${l.name || '(no name)'}<br/><span style="color:#666;font-size:12px;">${l.id}</span></strong></div>
@@ -134,6 +135,7 @@
     let states = [];
     let positions = new Map();
     let rects = new Map();
+    let connectedIds = new Set();
     let lampNames = new Map();
     let selectedLampId = null;
     let pan = { x: 0, y: 0 };
@@ -203,7 +205,7 @@
         const height = canvas.height - padding * 2;
 
         // Initialize by street grouping, then relax
-        const streets = Array.from(new Set(graph.nodes.map(n => n.street)));
+        const streets = Array.from(new Set(graph.nodes.map(n => n.street && n.street.length ? n.street : '(unassigned)')));
         const streetIndex = new Map(streets.map((s, i) => [s, i]));
         const laneCount = Math.max(1, streets.length);
         const laneY = (i) => padding + (i + 0.5) * (height / laneCount);
@@ -211,7 +213,7 @@
         positions = new Map();
         const grouped = new Map();
         graph.nodes.forEach(n => {
-            const key = n.street;
+            const key = (n.street && n.street.length) ? n.street : '(unassigned)';
             if (!grouped.has(key)) grouped.set(key, []);
             grouped.get(key).push(n);
         });
@@ -266,7 +268,7 @@
                 positions.set(id, { x, y });
             });
         }
-        
+
         // rects
         rects = new Map();
         const blockW = 48, blockH = 32;
@@ -286,7 +288,7 @@
         } catch { }
         if (!positions || positions.size !== graph.nodes.length) {
             // Try loading positions from server if missing
-            layoutPositions();
+            // Do not auto-layout here; respect loaded/saved positions.
         }
 
         // edges
@@ -330,14 +332,28 @@
             ctx.fill();
             // base stroke style
             let stroke = isSelected ? '#60a5fa' : '#9ca3af';
-            if (window.__simPulseIds && window.__simPulseIds.has(n.id)) {
-                const a = window.__simPulseColorA || '#60a5fa';
-                const b = window.__simPulseColorB || a;
-                stroke = window.__simPulseToggle ? b : a;
-            }
+            try {
+                const now = Date.now();
+                if (window.__pulseUntil && window.__pulseUntil.get(n.id) > now) {
+                    const a = window.__simPulseColorA || '#60a5fa';
+                    const b = window.__simPulseColorB || a;
+                    stroke = window.__simPulseToggle ? b : a;
+                } else if (window.__pulseUntil && window.__pulseUntil.has(n.id)) {
+                    window.__pulseUntil.delete(n.id);
+                }
+            } catch {}
             ctx.strokeStyle = stroke;
             ctx.lineWidth = isSelected ? 3 : 1.5;
             ctx.stroke();
+
+            // connection status dot (green if connected, red if not)
+            const dotR = 4;
+            const dotX = x + 4;
+            const dotY = y + 4;
+            ctx.beginPath();
+            ctx.arc(dotX, dotY, dotR, 0, Math.PI * 2);
+            ctx.fillStyle = connectedIds.has(n.id) ? '#10b981' : '#ef4444';
+            ctx.fill();
 
             // label inside node
             ctx.fillStyle = '#333';
@@ -359,7 +375,14 @@
             lampNames = new Map(lamps.map(l => [l.id, l.name || '']));
         } catch { lampNames = new Map(); }
         // Load positions, then render
-        await loadPositions();
+        const ok = await loadPositions();
+        if (!ok || positions.size === 0) {
+            layoutPositions();
+        } else {
+            // Fill in any missing nodes without positions
+            const missing = graph.nodes.filter(n => !positions.has(n.id));
+            if (missing.length) layoutPositions();
+        }
         render();
     }
 
@@ -465,20 +488,12 @@
         const res = await fetch(`/streets/${encodeURIComponent(street)}/preview`);
         const data = await res.json();
         const ids = new Set(data.affectedLampIds);
-
-        // Pulse border color only for 5s (use settings pulseColor)
-        const PULSE_MS = 5000;
-        const STEP_MS = 200;
-        window.__simPulseIds = ids;
-        window.__simPulseToggle = false;
-        // fetch pulseColor from settings
         let pulseColor = '#60a5fa';
         try {
             const s = await (await fetch('/settings')).json();
             if (s && typeof s.pulseColor === 'string') pulseColor = s.pulseColor;
         } catch {}
-        // compute a darker variant
-        function darken(hex, factor = 0.8) {
+        const darker = (hex, factor = 0.75) => {
             const m = hex.startsWith('#') ? hex.slice(1) : hex;
             if (m.length !== 6) return hex;
             const r = Math.max(0, Math.min(255, Math.floor(parseInt(m.slice(0,2),16) * factor)));
@@ -486,32 +501,39 @@
             const b = Math.max(0, Math.min(255, Math.floor(parseInt(m.slice(4,6),16) * factor)));
             const toHex = (n) => n.toString(16).padStart(2,'0');
             return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-        }
-        window.__simPulseColorA = pulseColor;
-        window.__simPulseColorB = darken(pulseColor, 0.75);
-
-        // Clear existing timers
-        if (window.__lampPulseTimer) { clearInterval(window.__lampPulseTimer); window.__lampPulseTimer = null; }
-        if (window.__lampPulseTimeout) { clearTimeout(window.__lampPulseTimeout); window.__lampPulseTimeout = null; }
-
-        window.__lampPulseTimer = setInterval(() => {
-            window.__simPulseToggle = !window.__simPulseToggle;
-            render();
-        }, STEP_MS);
-
-        window.__lampPulseTimeout = setTimeout(() => {
-            if (window.__lampPulseTimer) { clearInterval(window.__lampPulseTimer); window.__lampPulseTimer = null; }
-            window.__simPulseIds = null;
-            window.__simPulseToggle = false;
-            render();
-        }, PULSE_MS);
+        };
+        startPulse(ids, pulseColor, darker(pulseColor, 0.75), 5000);
+        return;
     });
+
+    // Identify: instruct device to flash violently for a few seconds
+    if (popupIdentifyBtn) popupIdentifyBtn.addEventListener('click', async () => {
+        if (!selectedLampId) return;
+        try {
+            const res = await fetch(`/lamps/${encodeURIComponent(selectedLampId)}/device/identify`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ durationMs: 3000 })
+            });
+            if (!res.ok) throw new Error('identify failed');
+        } catch { }
+    });
+
+    function startPulse(idSet, colorA, colorB, durationMs){
+        window.__simPulseColorA = colorA || '#60a5fa';
+        window.__simPulseColorB = colorB || window.__simPulseColorA;
+        if (!window.__pulseUntil) window.__pulseUntil = new Map();
+        const now = Date.now();
+        idSet.forEach(id => window.__pulseUntil.set(id, now + (durationMs||3000)));
+        if (window.__lampPulseTimer) { clearInterval(window.__lampPulseTimer); window.__lampPulseTimer = null; }
+        window.__lampPulseTimer = setInterval(() => { window.__simPulseToggle = !window.__simPulseToggle; render(); }, 180);
+        render();
+    }
 
     // WebSocket
     let ws;
     function connectWS() {
         ws = new WebSocket(`ws://${location.host}`);
-        ws.onmessage = (ev) => {
+        ws.onmessage = async (ev) => {
             try {
                 const msg = JSON.parse(ev.data);
                 if (msg.type === 'init') {
@@ -530,8 +552,20 @@
                     refreshGraph();
                 }
                 if (msg.type === 'update') {
+                    if (msg.graph) { graph = msg.graph; }
                     states = msg.states || states;
+                    // Pulse when street activation event included; use affectedLampIds to include spillover
+                    if (Array.isArray(msg.events)) {
+                        const ev = msg.events.find(e => e && e.type === 'street_activated' && Array.isArray(e.affectedLampIds));
+                        if (ev) {
+                            startPulse(new Set(ev.affectedLampIds), '#34d399', '#059669', 3000);
+                        }
+                    }
                     render();
+                }
+                if (msg.type === 'street_activated' && typeof msg.street === 'string') {
+                    const ids = new Set(graph.nodes.filter(n => n.street === msg.street).map(n => n.id));
+                    startPulse(ids, '#34d399', '#059669', 3000);
                 }
                 if (msg.type === 'positions' && msg.positions) {
                     positions = new Map(Object.entries(msg.positions).map(([id, p]) => [id, p]));
@@ -542,6 +576,29 @@
                         rects.set(id, { x: p.x - blockW / 2, y: p.y - blockH / 2, w: blockW, h: blockH });
                     });
                     render();
+                }
+                if (msg.type === 'device_status' && Array.isArray(msg.connectedIds)) {
+                    connectedIds = new Set(msg.connectedIds);
+                    render();
+                }
+                // Device-level activation for individual lamps: pulse that lamp briefly
+                if (msg.type === 'activated' && typeof msg.id === 'string') {
+                    const ids = new Set([msg.id]);
+                    let pulseColor = '#34d399';
+                    try {
+                        const s = await (await fetch('/settings')).json();
+                        if (s && typeof s.pulseColor === 'string') pulseColor = s.pulseColor;
+                    } catch { }
+                    const darker = (hex, factor = 0.75) => {
+                        const m = hex.startsWith('#') ? hex.slice(1) : hex;
+                        if (m.length !== 6) return hex;
+                        const r = Math.max(0, Math.min(255, Math.floor(parseInt(m.slice(0, 2), 16) * factor)));
+                        const g = Math.max(0, Math.min(255, Math.floor(parseInt(m.slice(2, 4), 16) * factor)));
+                        const b = Math.max(0, Math.min(255, Math.floor(parseInt(m.slice(4, 6), 16) * factor)));
+                        const toHex = (n) => n.toString(16).padStart(2, '0');
+                        return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+                    };
+                    startPulse(ids, pulseColor, darker(pulseColor, 0.75), 3000);
                 }
             } catch { }
         };

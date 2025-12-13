@@ -75,6 +75,10 @@ export class LampEngine {
 
     lamp.state = updated;
     this.lamps.set(lampId, lamp);
+    try {
+      const action = updated.on ? "activated" : "deactivated";
+      console.log(`[LampEngine] Lamp ${lampId} ${action} | brightness=${updated.brightness} color=${updated.color}`);
+    } catch {}
     this.recordEvent({ type: "lamp_state_updated", lampId, state: { ...updated } });
   }
 
@@ -114,14 +118,19 @@ export class LampEngine {
     const nodes = Array.from(this.lamps.values()).map((l) => ({ id: l.id, street: l.street }));
 
     const edges: GraphEdge[] = [];
+    const seen = new Set<string>();
     for (const lamp of this.lamps.values()) {
       for (const neighborId of lamp.connections) {
-        // Avoid duplicate edges
-        if (lamp.id < neighborId && this.lamps.has(neighborId)) {
-          const neighbor = this.lamps.get(neighborId)!;
-          const type: GraphEdge["type"] = lamp.street === neighbor.street ? "same_street" : "cross_street";
-          edges.push({ from: lamp.id, to: neighborId, type });
-        }
+        if (!this.lamps.has(neighborId)) continue;
+        const a = lamp.id;
+        const b = neighborId;
+        const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const neighbor = this.lamps.get(neighborId)!;
+        const type: GraphEdge["type"] = lamp.street === neighbor.street ? "same_street" : "cross_street";
+        // Preserve original direction for consistency (from current lamp to neighbor)
+        edges.push({ from: lamp.id, to: neighborId, type });
       }
     }
 

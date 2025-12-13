@@ -175,9 +175,10 @@
     },
     {
       "id": "66dd55ee",
-      "street": "Third",
+      "street": "Fourth",
       "connections": [
-        "77cc66dd"
+        "77cc66dd",
+        "ebc8f655"
       ],
       "state": {
         "on": false,
@@ -185,6 +186,21 @@
         "color": "#ffffff"
       },
       "name": "T4"
+    },
+    {
+      "id": "ebc8f655",
+      "street": "Fourth",
+      "connections": [
+        "a1b2c3d4",
+        "e5f6a7b8",
+        "66dd55ee"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff"
+      },
+      "name": "F1"
     }
   ]
 }

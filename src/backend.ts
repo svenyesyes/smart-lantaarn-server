@@ -10,6 +10,7 @@ export type ActivateParams = {
 export default class Backend {
   private engine: LampEngine;
   private defaultSpill: number;
+  private lampSender?: (id: string, msg: any) => boolean;
 
   constructor(engine: LampEngine, defaultSpilloverDepth: number) {
     this.engine = engine;
@@ -48,5 +49,24 @@ export default class Backend {
   previewStreetActivation(streetId: string, spillover?: boolean): string[] {
     const depth = spillover === false ? 0 : this.defaultSpill;
     return this.engine.previewStreetActivation(streetId, depth);
+  }
+
+  setLampSender(sender: (id: string, msg: any) => boolean) {
+    this.lampSender = sender;
+  }
+
+  sendToLamp(lampId: string, msg: any): boolean {
+    if (!this.lampSender) return false;
+    return this.lampSender(lampId, msg);
+  }
+
+  sendLampColorCommand(lampId: string, color: string) {
+    // Generic device-side command to change color
+    return this.sendToLamp(lampId, { type: "set_color", id: lampId, color });
+  }
+
+  sendLampIdentifyCommand(lampId: string, durationMs: number = 3000) {
+    // Ask device to run an identify pattern for a short time
+    return this.sendToLamp(lampId, { type: "identify", id: lampId, durationMs });
   }
 }
