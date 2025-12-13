@@ -11,10 +11,29 @@ const __dirname = path.dirname(__filename);
 
 // Load lamps from JSON settings
 const settingsPath = path.join(__dirname, "../data/settings.json");
-const settingsRaw = fs.readFileSync(settingsPath, "utf-8");
-const settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; spilloverDepth?: number };
+let settingsRaw = fs.readFileSync(settingsPath, "utf-8");
+let settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; spilloverDepth?: number; pulseColor?: string };
 const lamps: Lamp[] = settings.lamps;
 const SPILLOVER_DEPTH: number = typeof settings.spilloverDepth === "number" ? settings.spilloverDepth : 0;
+let PULSE_COLOR: string = typeof settings.pulseColor === "string" ? settings.pulseColor : "#60a5fa";
+
+// Simple 10s cache for /settings endpoint
+let settingsCacheTime = 0;
+function getSettingsCached() {
+  const now = Date.now();
+  if (now - settingsCacheTime > 10_000) {
+    try {
+      settingsRaw = fs.readFileSync(settingsPath, "utf-8");
+      settings = JSON.parse(settingsRaw);
+      // Update pulse color used by clients fetching /settings (does not affect engine spillover)
+      PULSE_COLOR = typeof settings.pulseColor === "string" ? settings.pulseColor : PULSE_COLOR;
+    } catch {}
+    settingsCacheTime = now;
+  }
+  const spill = typeof settings.spilloverDepth === "number" ? settings.spilloverDepth : SPILLOVER_DEPTH;
+  const pulse = typeof settings.pulseColor === "string" ? settings.pulseColor : PULSE_COLOR;
+  return { spilloverDepth: spill, pulseColor: pulse };
+}
 
 const engine = new LampEngine(lamps);
 
@@ -69,7 +88,7 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 app.get("/settings", (_req: Request, res: Response) => {
-  res.json({ spilloverDepth: SPILLOVER_DEPTH });
+  res.json(getSettingsCached());
 });
 
 const server = http.createServer(app);
