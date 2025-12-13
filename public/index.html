@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Lantaarn UI</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Smart Lantaarn</h1>
+      <label class="drag-toggle"><input type="checkbox" id="dragMode"> Drag mode</label>
+    </header>
+
+    <main>
+      <canvas id="graphCanvas"></canvas>
+      <div id="lampPopup" class="popup hidden">
+        <div class="popup-content">
+          <h3 id="popupTitle">Lamp</h3>
+          <div id="popupBody"></div>
+          <div class="popup-actions">
+            <button id="popupActivateBtn">Activate</button>
+            <button id="popupCloseBtn">Close</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

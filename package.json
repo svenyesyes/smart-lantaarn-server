@@ -1,0 +1,36 @@
+{
+  "name": "smart-lantaarn-server",
+  "version": "1.0.0",
+  "description": "Decision engine for smart street lighting (lamp state & graph traversal)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "start:harness": "node dist/harness.js",
+    "dev": "tsc -w -p tsconfig.json",
+    "lint": "echo \"Add ESLint later\"",
+    "test": "node dist/harness.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/svenyesyes/smart-lantaarn-server.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/svenyesyes/smart-lantaarn-server/issues"
+  },
+  "homepage": "https://github.com/svenyesyes/smart-lantaarn-server#readme",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.0.1",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ws": "^8.18.3"
+  }
+}
