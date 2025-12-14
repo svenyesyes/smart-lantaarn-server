@@ -1,5 +1,17 @@
 {
   "spilloverDepth": 1,
   "pulseColor": "#ffc400",
-  "lamps": []
+  "lamps": [
+    {
+      "id": "8348aa8d",
+      "street": "",
+      "connections": [],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff"
+      },
+      "name": ""
+    }
+  ]
 }

@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import LampEngine, { Lamp, ActivateStreetOptions } from "./LampEngine.js";
 import Backend from "./backend.js";
 import fs from "fs";
+import os from "os";
 import dgram from "dgram";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -249,8 +250,42 @@ function isIdInUse(id: string): boolean {
   return g.nodes.some((n) => n.id === id);
 }
 
-lampWss.on("connection", (ws: WebSocket) => {
+lampWss.on("connection", (ws: WebSocket, req: any) => {
+  try {
+    const ip = req?.socket?.remoteAddress ?? req?.connection?.remoteAddress ?? "-";
+    console.log(`[lamp-ws CONNECT] ip=${ip}`);
+  } catch { }
+  // Debug: wrap outbound sends for this lamp socket
+  const __originalSend = ws.send.bind(ws);
+  (ws as any).send = ((data: any, ...args: any[]) => {
+    try {
+      const currentId = lampAuthBySocket.get(ws);
+      const payloadStr = typeof data === "string"
+        ? data
+        : Buffer.isBuffer(data)
+          ? data.toString()
+          : JSON.stringify(data);
+      let outType: any = undefined;
+      try { outType = JSON.parse(payloadStr)?.type; } catch { }
+      console.log(`[lamp-ws OUT] id=${currentId ?? '-'} type=${outType ?? '-'} data=${payloadStr}`);
+    } catch { }
+    return __originalSend(data as any, ...args as any);
+  }) as any;
+
   ws.on("message", (raw: Buffer) => {
+    // Debug: log inbound lamp messages
+    try {
+      const txt = raw.toString();
+      const currentId = lampAuthBySocket.get(ws);
+      let inType: any = undefined;
+      let idForLog: any = currentId;
+      try {
+        const parsed = JSON.parse(txt);
+        inType = parsed?.type;
+        idForLog = idForLog || parsed?.id;
+      } catch { }
+      console.log(`[lamp-ws IN] id=${idForLog ?? '-'} type=${inType ?? '-'} data=${txt}`);
+    } catch { }
     try {
       const msg = JSON.parse(raw.toString());
       // Legacy: explicit register with provided id
@@ -359,17 +394,39 @@ lampServer.listen(LAMP_WS_PORT, () => {
   console.log(`Lamp WebSocket listening on ws://localhost:${LAMP_WS_PORT}`);
 });
 
-// UDP broadcast: announce lamp server availability for devices on the LAN
-try {
-  const udpSocket = dgram.createSocket("udp4");
-  udpSocket.on("error", () => { /* ignore errors for broadcast */ });
-  udpSocket.bind(() => {
-    try { udpSocket.setBroadcast(true); } catch { }
-  });
-  setInterval(() => {
-    try {
-      const message = Buffer.from(JSON.stringify({ type: "lamp_server_announce", ws_port: LAMP_WS_PORT }));
-      udpSocket.send(message, 0, message.length, 3091, "255.255.255.255");
-    } catch { }
-  }, 2000);
-} catch { }
+function getBroadcastAddresses() {
+  const interfaces = os.networkInterfaces();
+  const broadcasts = [];
+
+  for (const iface of Object.values(interfaces)) {
+    for (const addr of iface || []) {
+      if (
+        addr.family === "IPv4" &&
+        !addr.internal &&
+        addr.netmask
+      ) {
+        const ip = addr.address.split(".").map(Number);
+        const mask = addr.netmask.split(".").map(Number);
+
+        const broadcast = ip.map((b, i) => (b | (~mask[i] & 255)));
+        broadcasts.push(broadcast.join("."));
+      }
+    }
+  }
+
+  return broadcasts;
+}
+
+const socket = dgram.createSocket("udp4");
+socket.bind(() => socket.setBroadcast(true));
+
+setInterval(() => {
+  const msg = Buffer.from(JSON.stringify({
+    type: "lamp_server_announce",
+    ws_port: 3090
+  }));
+
+  for (const bcast of getBroadcastAddresses()) {
+    socket.send(msg, 3091, bcast);
+  }
+}, 2000);
