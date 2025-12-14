@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import LampEngine, { Lamp, ActivateStreetOptions } from "./LampEngine.js";
 import Backend from "./backend.js";
 import fs from "fs";
+import dgram from "dgram";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +29,7 @@ function getSettingsCached() {
       settings = JSON.parse(settingsRaw);
       // Update pulse color used by clients fetching /settings (does not affect engine spillover)
       PULSE_COLOR = typeof settings.pulseColor === "string" ? settings.pulseColor : PULSE_COLOR;
-    } catch {}
+    } catch { }
     settingsCacheTime = now;
   }
   const spill = typeof settings.spilloverDepth === "number" ? settings.spilloverDepth : SPILLOVER_DEPTH;
@@ -70,7 +71,7 @@ app.post("/lamps/:lampId/update", (req: Request, res: Response) => {
       json.lamps = json.lamps.map((itm: any) => itm.id === lampId ? { ...itm, name: l.name, street: l.street, connections: l.connections } : itm);
       fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
     }
-  } catch {}
+  } catch { }
   broadcastLampStates();
   res.json({ ok: true });
 });
@@ -158,7 +159,7 @@ const positionsPath = path.join(__dirname, "../data/positions.json");
 try {
   const raw = fs.readFileSync(positionsPath, "utf-8");
   positionsCache = JSON.parse(raw);
-} catch {}
+} catch { }
 
 wss.on("connection", (ws: WebSocket) => {
   ws.send(
@@ -179,7 +180,7 @@ function broadcastLampStates() {
   wss.clients.forEach((client: WebSocket) => {
     try {
       client.send(payload);
-    } catch {}
+    } catch { }
   });
 }
 
@@ -192,7 +193,7 @@ function notifyDeviceActivation(affectedLampIds: string[]) {
       const l = (engine as any).lamps.get(id) as Lamp | undefined;
       const state = l ? l.state : undefined;
       client.ws.send(JSON.stringify({ type: "activated", id, state }));
-    } catch {}
+    } catch { }
   });
 }
 
@@ -200,10 +201,10 @@ function setPositions(p: Record<string, { x: number; y: number }>) {
   positionsCache = p;
   try {
     fs.writeFileSync(positionsPath, JSON.stringify(positionsCache, null, 2), "utf-8");
-  } catch {}
+  } catch { }
   const payload = JSON.stringify({ type: "positions", positions: positionsCache });
   wss.clients.forEach((client: WebSocket) => {
-    try { client.send(payload); } catch {}
+    try { client.send(payload); } catch { }
   });
 }
 
@@ -211,8 +212,8 @@ function broadcastDeviceStatus() {
   try {
     const connectedIds = Array.from(lampClients.keys());
     const payload = JSON.stringify({ type: "device_status", connectedIds });
-    wss.clients.forEach((client: WebSocket) => { try { client.send(payload); } catch {} });
-  } catch {}
+    wss.clients.forEach((client: WebSocket) => { try { client.send(payload); } catch { } });
+  } catch { }
 }
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
@@ -280,7 +281,7 @@ lampWss.on("connection", (ws: WebSocket) => {
             });
             fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
           }
-        } catch {}
+        } catch { }
         return;
       }
       // New: authorize connection with an ID
@@ -289,7 +290,7 @@ lampWss.on("connection", (ws: WebSocket) => {
         // Ensure uniqueness: replace any existing mapping
         const existing = lampClients.get(id);
         if (existing && existing.ws !== ws) {
-          try { existing.ws.close(); } catch {}
+          try { existing.ws.close(); } catch { }
           lampClients.delete(id);
         }
         lampClients.set(id, { id, ws });
@@ -329,8 +330,8 @@ lampWss.on("connection", (ws: WebSocket) => {
           // Also notify UI clients explicitly
           try {
             const uiPayload = JSON.stringify({ type: "street_activated", street: l.street });
-            wss.clients.forEach((client: WebSocket) => { try { client.send(uiPayload); } catch {} });
-          } catch {}
+            wss.clients.forEach((client: WebSocket) => { try { client.send(uiPayload); } catch { } });
+          } catch { }
           // Notify all affected devices, including the issuer
           const events = engine.getEvents();
           const last = events[events.length - 1] as any;
@@ -343,7 +344,7 @@ lampWss.on("connection", (ws: WebSocket) => {
         }
         return;
       }
-    } catch {}
+    } catch { }
   });
   ws.on("close", () => {
     // remove any mapping referencing this ws
@@ -357,3 +358,18 @@ lampWss.on("connection", (ws: WebSocket) => {
 lampServer.listen(LAMP_WS_PORT, () => {
   console.log(`Lamp WebSocket listening on ws://localhost:${LAMP_WS_PORT}`);
 });
+
+// UDP broadcast: announce lamp server availability for devices on the LAN
+try {
+  const udpSocket = dgram.createSocket("udp4");
+  udpSocket.on("error", () => { /* ignore errors for broadcast */ });
+  udpSocket.bind(() => {
+    try { udpSocket.setBroadcast(true); } catch { }
+  });
+  setInterval(() => {
+    try {
+      const message = Buffer.from(JSON.stringify({ type: "lamp_server_announce", ws_port: LAMP_WS_PORT }));
+      udpSocket.send(message, 0, message.length, 3091, "255.255.255.255");
+    } catch { }
+  }, 2000);
+} catch { }
