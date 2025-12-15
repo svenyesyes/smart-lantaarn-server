@@ -16,6 +16,8 @@
     const cfgCloseBtn = document.getElementById('cfgCloseBtn');
     const cfgStatus = document.getElementById('cfgStatus');
     const cfgList = document.getElementById('cfgList');
+    const streetSelect = document.getElementById('streetSelect');
+    const activateStreetBtn = document.getElementById('activateStreetBtn');
 
     function resizeCanvas() {
         canvas.width = canvas.clientWidth;
@@ -326,9 +328,14 @@
             const x = rect.x + pan.x, y = rect.y + pan.y;
             const radius = 6;
             drawRoundedRectPath(x, y, rect.w, rect.h, radius);
-            // fill node with current lamp color
+            // fill node based on current lamp state
             const state = states.find(s => s.id === n.id)?.state;
-            ctx.fillStyle = (state && state.color) ? state.color : '#ffffff';
+            if (state && state.on) {
+                ctx.fillStyle = state.color || '#ffffff';
+            } else {
+                // visually off: neutral fill regardless of last color
+                ctx.fillStyle = '#ffffff';
+            }
             ctx.fill();
             // base stroke style
             let stroke = isSelected ? '#60a5fa' : '#9ca3af';
@@ -369,6 +376,13 @@
     async function refreshGraph() {
         const res = await fetch('/graph');
         graph = await res.json();
+        // Populate streets dropdown
+        try {
+            const streets = Array.from(new Set(graph.nodes.map(n => (n.street && n.street.length) ? n.street : null).filter(Boolean))).sort();
+            if (streetSelect) {
+                streetSelect.innerHTML = streets.map(s => `<option value="${s}">${s}</option>`).join('');
+            }
+        } catch {}
         // load names for display
         try {
             const lamps = await (await fetch('/lamps')).json();
@@ -609,4 +623,17 @@
     resizeCanvas();
     refreshGraph();
     connectWS();
+
+    // Activate selected street via server API (simulate device-origin activation semantics)
+    if (activateStreetBtn) activateStreetBtn.addEventListener('click', async () => {
+        const street = streetSelect && streetSelect.value;
+        if (!street) return;
+        try {
+            const res = await fetch(`/streets/${encodeURIComponent(street)}/activate?spillover=true`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ on: true })
+            });
+            if (!res.ok) throw new Error('activate failed');
+        } catch {}
+    });
 })();

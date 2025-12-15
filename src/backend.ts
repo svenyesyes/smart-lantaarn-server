@@ -11,10 +11,12 @@ export default class Backend {
   private engine: LampEngine;
   private defaultSpill: number;
   private lampSender?: (id: string, msg: any) => boolean;
+  private defaultOnColor?: string;
 
-  constructor(engine: LampEngine, defaultSpilloverDepth: number) {
+  constructor(engine: LampEngine, defaultSpilloverDepth: number, defaultOnColor?: string) {
     this.engine = engine;
     this.defaultSpill = defaultSpilloverDepth;
+    this.defaultOnColor = defaultOnColor;
   }
 
   getGraph(): GraphData {
@@ -37,10 +39,29 @@ export default class Backend {
 
   activateStreet(streetId: string, params: ActivateParams = {}) {
     const spill = params.spillover === false ? 0 : this.defaultSpill;
+    // Derive color (RGB only) and brightness (from AA) if defaultOnColor is provided
+    let derivedColor = params.color;
+    let derivedBrightness = params.brightness;
+    if (!derivedColor || derivedBrightness === undefined) {
+      const c = this.defaultOnColor;
+      if (typeof c === 'string' && /^#?[0-9a-fA-F]{8}$/.test(c)) {
+        const hex = c.startsWith('#') ? c.slice(1) : c;
+        const rgb = `#${hex.slice(0, 6)}`; // RRGGBB
+        const aa = hex.slice(6, 8); // AA
+        if (!derivedColor) derivedColor = rgb;
+        if (derivedBrightness === undefined) {
+          const val = parseInt(aa, 16);
+          if (Number.isFinite(val)) derivedBrightness = val;
+        }
+      } else if (!derivedColor && typeof c === 'string' && /^#?[0-9a-fA-F]{6}$/.test(c)) {
+        derivedColor = c.startsWith('#') ? c : `#${c}`;
+      }
+    }
+
     const opts: ActivateStreetOptions = {
       on: params.on ?? true,
-      brightness: params.brightness,
-      color: params.color,
+      brightness: derivedBrightness,
+      color: derivedColor,
       spilloverDepth: spill,
     };
     this.engine.activateStreet(streetId, opts);

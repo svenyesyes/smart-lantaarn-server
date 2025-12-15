@@ -43,6 +43,7 @@ export type EngineEvent =
 export class LampEngine {
   private lamps: Map<string, Lamp> = new Map();
   private events: EngineEvent[] = [];
+  private onStateUpdated?: (lampId: string, state: LampState) => void;
 
   constructor(initialLamps: Lamp[]) {
     for (const lamp of initialLamps) {
@@ -79,6 +80,7 @@ export class LampEngine {
       const action = updated.on ? "activated" : "deactivated";
       console.log(`[LampEngine] Lamp ${lampId} ${action} | brightness=${updated.brightness} color=${updated.color}`);
     } catch {}
+    try { if (this.onStateUpdated) this.onStateUpdated(lampId, { ...updated }); } catch {}
     this.recordEvent({ type: "lamp_state_updated", lampId, state: { ...updated } });
   }
 
@@ -183,6 +185,10 @@ export class LampEngine {
 
   private recordEvent(event: EngineEvent): void {
     this.events.push(event);
+  }
+
+  public setOnStateUpdated(fn: (lampId: string, state: LampState) => void) {
+    this.onStateUpdated = fn;
   }
 }
 

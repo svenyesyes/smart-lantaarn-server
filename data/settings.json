@@ -1,17 +1,48 @@
 {
   "spilloverDepth": 1,
   "pulseColor": "#ffc400",
+  "defaultOnColor": "#FFF1E0FF",
+  "activationDurationMs": 5000,
   "lamps": [
     {
-      "id": "8348aa8d",
-      "street": "",
-      "connections": [],
+      "id": "09e16258",
+      "street": "Test",
+      "connections": [
+        "8348aa8d"
+      ],
       "state": {
         "on": false,
         "brightness": 0,
         "color": "#ffffff"
       },
-      "name": ""
+      "name": "T1"
+    },
+    {
+      "id": "fa0e0c04",
+      "street": "Test",
+      "connections": [
+        "8348aa8d"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff"
+      },
+      "name": "T3"
+    },
+    {
+      "id": "8348aa8d",
+      "street": "Test",
+      "connections": [
+        "09e16258",
+        "fa0e0c04"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff"
+      },
+      "name": "T2"
     }
   ]
 }
