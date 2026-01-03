@@ -72,10 +72,12 @@
 
     async function renderLampList() {
         if (!cfgList) return;
-        cfgList.innerHTML = 'Loading lamps…';
+        cfgList.innerHTML = 'Loading devices…';
         try {
             const res = await fetch('/lamps');
             const lamps = await res.json();
+            const sres = await fetch('/sensors');
+            const sensors = await sres.json();
             const assigned = lamps.filter(l => l.street && l.street.length);
             const unassigned = lamps.filter(l => !l.street || !l.street.length);
             const renderRows = (list) => list.map(l => {
@@ -91,6 +93,19 @@
                     </div>
                 </div>`;
             }).join('');
+            const renderSensorRows = (list) => list.map(s => {
+                const rowId = `sensor-row-${s.id}`;
+                const linked = s.linkedLampId || '';
+                return `<div class="lamp-row" id="${rowId}">
+                    <div><strong>${s.name || '(no name)'}<br/><span style="color:#666;font-size:12px;">${s.id}</span></strong></div>
+                    <div><input data-id="${s.id}" class="inp-sensor-linked" value="${linked}" placeholder="Linked Lamp ID"/></div>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <input data-id="${s.id}" class="inp-sensor-name" value="${s.name || ''}" placeholder="Name" style="width:120px;"/>
+                        <button class="btn-sensor-save" data-id="${s.id}">Save</button>
+                    </div>
+                </div>`;
+            }).join('');
+
             cfgList.innerHTML = `
                 <h3 style="margin:8px 0;">Unassigned</h3>
                 <div class="lamp-row" style="font-weight:600;">
@@ -102,9 +117,14 @@
                     <div>Name / ID</div><div>Street</div><div>Connections</div><div>Actions</div>
                 </div>
                 ${renderRows(assigned)}
+                <h3 style="margin:16px 0 8px;">Sensors</h3>
+                <div class="lamp-row" style="font-weight:600;">
+                    <div>Name / ID</div><div>Linked Lamp</div><div>Actions</div>
+                </div>
+                ${renderSensorRows(sensors)}
             `;
 
-            // bind save buttons
+            // bind lamp save buttons
             cfgList.querySelectorAll('.btn-save').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const id = btn.getAttribute('data-id');
@@ -128,8 +148,30 @@
                     }
                 });
             });
+            // bind sensor save buttons (name + linked lamp)
+            cfgList.querySelectorAll('.btn-sensor-save').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.getAttribute('data-id');
+                    const name = cfgList.querySelector(`.inp-sensor-name[data-id="${id}"]`).value.trim();
+                    const linkedLampId = cfgList.querySelector(`.inp-sensor-linked[data-id="${id}"]`).value.trim();
+                    try {
+                        const res = await fetch(`/sensors/${encodeURIComponent(id)}/update`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name, linkedLampId })
+                        });
+                        if (res.ok) {
+                            cfgStatus.textContent = `Saved sensor ${id}`;
+                            renderLampList();
+                        } else {
+                            cfgStatus.textContent = `Failed to save sensor ${id}`;
+                        }
+                    } catch {
+                        cfgStatus.textContent = `Error saving sensor ${id}`;
+                    }
+                });
+            });
         } catch {
-            cfgList.innerHTML = 'Failed to load lamps';
+            cfgList.innerHTML = 'Failed to load devices';
         }
     }
 
@@ -139,6 +181,8 @@
     let rects = new Map();
     let connectedIds = new Set();
     let lampNames = new Map();
+    let sensorNames = new Map();
+    let sensorIds = new Set();
     let selectedLampId = null;
     let pan = { x: 0, y: 0 };
     let isPanning = false;
@@ -281,7 +325,7 @@
         return positions;
     }
 
-    function render() {
+    async function render() {
         if (!ctx) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         // Move dots grid with pan
@@ -295,11 +339,20 @@
 
         // edges
         ctx.lineWidth = 2;
-        graph.edges.forEach(e => {
+        graph.edges.forEach(async e => {
             const a = positions.get(e.from);
             const b = positions.get(e.to);
             if (!a || !b) return;
-            ctx.strokeStyle = e.type === 'same_street' ? '#747474ff' : '#398ed3ff';
+            let strokeStyle = '#398ed3ff';
+            if (e.type === 'same_street') strokeStyle = '#747474ff';
+            if (e.type === 'sensor_link') {
+                try {
+                    const s = window.__settingsCache || (await fetch('/settings')).json();
+                    window.__settingsCache = s;
+                    strokeStyle = (s && typeof s.sensorEdgeColor === 'string') ? s.sensorEdgeColor : '#8b5cf6';
+                } catch { strokeStyle = '#8b5cf6'; }
+            }
+            ctx.strokeStyle = strokeStyle;
             ctx.beginPath();
             ctx.moveTo(a.x + pan.x, a.y + pan.y);
             ctx.lineTo(b.x + pan.x, b.y + pan.y);
@@ -327,7 +380,16 @@
             const isSelected = selectedLampId === n.id;
             const x = rect.x + pan.x, y = rect.y + pan.y;
             const radius = 6;
-            drawRoundedRectPath(x, y, rect.w, rect.h, radius);
+            const isSensor = sensorIds.has(n.id);
+            if (isSensor) {
+                const cx = x + rect.w / 2;
+                const cy = y + rect.h / 2;
+                const r = Math.min(rect.w, rect.h) / 2;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            } else {
+                drawRoundedRectPath(x, y, rect.w, rect.h, radius);
+            }
             // fill node based on current lamp state
             const state = states.find(s => s.id === n.id)?.state;
             if (state && state.on) {
@@ -365,7 +427,7 @@
             // label inside node
             ctx.fillStyle = '#333';
             ctx.font = '12px system-ui';
-            const text = lampNames.get(n.id) || n.id;
+            const text = (sensorIds.has(n.id) ? (sensorNames.get(n.id) || n.id) : (lampNames.get(n.id) || n.id));
             const metrics = ctx.measureText(text);
             const tx = x + (rect.w - metrics.width) / 2;
             const ty = y + (rect.h + 12) / 2 - 2;
@@ -387,7 +449,10 @@
         try {
             const lamps = await (await fetch('/lamps')).json();
             lampNames = new Map(lamps.map(l => [l.id, l.name || '']));
-        } catch { lampNames = new Map(); }
+            const sensors = await (await fetch('/sensors')).json();
+            sensorNames = new Map(sensors.map(s => [s.id, s.name || '']));
+            sensorIds = new Set(sensors.map(s => s.id));
+        } catch { lampNames = new Map(); sensorNames = new Map(); sensorIds = new Set(); }
         // Load positions, then render
         const ok = await loadPositions();
         if (!ok || positions.size === 0) {

@@ -44,5 +44,18 @@
       },
       "name": "T2"
     }
+  ],
+  "sensors": [
+    {
+      "id": "1089da1e",
+      "linkedLampId": "09e16258",
+      "name": "S1"
+    },
+    {
+      "id": "9b2f2005",
+      "street": "",
+      "linkedLampId": "09e16258",
+      "name": "S2"
+    }
   ]
 }

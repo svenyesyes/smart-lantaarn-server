@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import LampEngine, { Lamp, ActivateStreetOptions } from "./LampEngine.js";
+import LampEngine, { Lamp, ActivateStreetOptions, GraphData } from "./LampEngine.js";
 import Backend from "./backend.js";
 import fs from "fs";
 import os from "os";
@@ -15,14 +15,16 @@ const __dirname = path.dirname(__filename);
 // Load lamps from JSON settings
 const settingsPath = path.join(__dirname, "../data/settings.json");
 let settingsRaw = fs.readFileSync(settingsPath, "utf-8");
-let settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; spilloverDepth?: number; pulseColor?: string; defaultOnColor?: string; activationDurationMs?: number };
+let settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; sensors?: { id: string; name?: string; street?: string; linkedLampId?: string }[]; spilloverDepth?: number; pulseColor?: string; defaultOnColor?: string; activationDurationMs?: number; sensorEdgeColor?: string };
 // Normalize potential malformed keys from settings.json (e.g., leading space)
 if ((settings as any)[" activationDurationMs"] && !settings.activationDurationMs) {
   try { settings.activationDurationMs = Number((settings as any)[" activationDurationMs"]); } catch {}
 }
 const lamps: Lamp[] = settings.lamps;
+const sensors: { id: string; name?: string; street?: string; linkedLampId?: string }[] = Array.isArray(settings.sensors) ? settings.sensors : [];
 const SPILLOVER_DEPTH: number = typeof settings.spilloverDepth === "number" ? settings.spilloverDepth : 0;
 let PULSE_COLOR: string = typeof settings.pulseColor === "string" ? settings.pulseColor : "#60a5fa";
+let SENSOR_EDGE_COLOR: string = typeof settings.sensorEdgeColor === "string" ? settings.sensorEdgeColor : "#8b5cf6"; // purple default
 const ACTIVATION_DURATION_MS: number | undefined = typeof settings.activationDurationMs === "number" && settings.activationDurationMs > 0 ? settings.activationDurationMs : undefined;
 
 // Simple 10s cache for /settings endpoint
@@ -38,6 +40,7 @@ function getSettingsCached() {
       }
       // Update pulse color used by clients fetching /settings (does not affect engine spillover)
       PULSE_COLOR = typeof settings.pulseColor === "string" ? settings.pulseColor : PULSE_COLOR;
+      SENSOR_EDGE_COLOR = typeof settings.sensorEdgeColor === "string" ? settings.sensorEdgeColor : SENSOR_EDGE_COLOR;
     } catch { }
     settingsCacheTime = now;
   }
@@ -45,7 +48,8 @@ function getSettingsCached() {
   const pulse = typeof settings.pulseColor === "string" ? settings.pulseColor : PULSE_COLOR;
   const defaultOnColor = typeof settings.defaultOnColor === "string" ? settings.defaultOnColor : undefined;
   const activationDurationMs = typeof settings.activationDurationMs === "number" ? settings.activationDurationMs : undefined;
-  return { spilloverDepth: spill, pulseColor: pulse, defaultOnColor, activationDurationMs };
+  const sensorEdgeColor = typeof settings.sensorEdgeColor === "string" ? settings.sensorEdgeColor : SENSOR_EDGE_COLOR;
+  return { spilloverDepth: spill, pulseColor: pulse, defaultOnColor, activationDurationMs, sensorEdgeColor };
 }
 
 const engine = new LampEngine(lamps);
@@ -58,10 +62,14 @@ const publicDir = path.join(__dirname, "../public");
 app.use(express.static(publicDir));
 
 app.get("/graph", (_req: Request, res: Response) => {
-  res.json(backend.getGraph());
+  res.json(getCombinedGraph());
 });
 app.get("/lamps", (_req: Request, res: Response) => {
   res.json(backend.getAllLamps());
+});
+// Sensors: list
+app.get("/sensors", (_req: Request, res: Response) => {
+  res.json(getAllSensors());
 });
 
 // Update lamp metadata (name, street, connections). ID is immutable.
@@ -83,6 +91,20 @@ app.post("/lamps/:lampId/update", (req: Request, res: Response) => {
       fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
     }
   } catch { }
+  broadcastLampStates();
+  res.json({ ok: true });
+});
+// Update sensor metadata (name, street, linkedLampId). ID is immutable.
+app.post("/sensors/:sensorId/update", (req: Request, res: Response) => {
+  const sensorId = req.params.sensorId;
+  const { name, street, linkedLampId } = req.body || {};
+  const s = getSensorById(sensorId);
+  if (!s) { res.status(404).json({ ok: false, error: "Sensor not found" }); return; }
+  const updated = { ...s } as any;
+  if (typeof name === "string") updated.name = name;
+  if (typeof street === "string") updated.street = street;
+  if (typeof linkedLampId === "string") updated.linkedLampId = linkedLampId;
+  setSensorById(sensorId, updated);
   broadcastLampStates();
   res.json({ ok: true });
 });
@@ -174,11 +196,11 @@ try {
 
 wss.on("connection", (ws: WebSocket) => {
   ws.send(
-    JSON.stringify({ type: "init", graph: engine.getLampGraph(), states: getAllLampStates(), positions: positionsCache })
+    JSON.stringify({ type: "init", graph: getCombinedGraph(), states: getAllLampStates(), positions: positionsCache })
   );
   // Also send current device connection status so UI can mark online dots
   try {
-    const connectedIds = Array.from(lampClients.keys());
+    const connectedIds = Array.from(new Set([...lampClients.keys(), ...sensorClients.keys()]));
     ws.send(JSON.stringify({ type: "device_status", connectedIds }));
   } catch {}
 });
@@ -192,7 +214,7 @@ function getAllLampStates() {
 }
 
 function broadcastLampStates() {
-  const payload = JSON.stringify({ type: "update", graph: engine.getLampGraph(), states: getAllLampStates(), events: engine.getEvents() });
+  const payload = JSON.stringify({ type: "update", graph: getCombinedGraph(), states: getAllLampStates(), events: engine.getEvents() });
   wss.clients.forEach((client: WebSocket) => {
     try {
       client.send(payload);
@@ -226,7 +248,7 @@ function setPositions(p: Record<string, { x: number; y: number }>) {
 
 function broadcastDeviceStatus() {
   try {
-    const connectedIds = Array.from(lampClients.keys());
+    const connectedIds = Array.from(new Set([...lampClients.keys(), ...sensorClients.keys()]));
     const payload = JSON.stringify({ type: "device_status", connectedIds });
     wss.clients.forEach((client: WebSocket) => { try { client.send(payload); } catch { } });
   } catch { }
@@ -246,6 +268,14 @@ type LampClient = { id: string; ws: WebSocket };
 const lampClients: Map<string, LampClient> = new Map();
 const lampAuthBySocket: WeakMap<WebSocket, string> = new WeakMap();
 const autoOffTimers: Map<string, NodeJS.Timeout> = new Map();
+
+// Sensor WS server
+const sensorServer = http.createServer();
+const sensorWss = new WebSocketServer({ server: sensorServer });
+const SENSOR_WS_PORT = 3092;
+type SensorClient = { id: string; ws: WebSocket };
+const sensorClients: Map<string, SensorClient> = new Map();
+const sensorAuthBySocket: WeakMap<WebSocket, string> = new WeakMap();
 
 function ensureEngineLampExists(id: string) {
   const g = engine.getLampGraph();
@@ -277,6 +307,18 @@ function ensureSettingsLampExists(id: string) {
         state: { on: false, brightness: 0, color: "#ffffff" },
         name: ""
       });
+      fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
+    }
+  } catch {}
+}
+
+function ensureSettingsSensorExists(id: string) {
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const json = JSON.parse(raw);
+    json.sensors = Array.isArray(json.sensors) ? json.sensors : [];
+    if (!json.sensors.some((s: any) => s && s.id === id)) {
+      json.sensors.push({ id, street: "", linkedLampId: "", name: "" });
       fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
     }
   } catch {}
@@ -353,6 +395,59 @@ backend.setLampSender((id: string, msg: any) => {
   try { client.ws.send(JSON.stringify(msg)); return true; } catch { return false; }
 });
 
+// Helpers for sensors
+function getAllSensors(): { id: string; name?: string; street?: string; linkedLampId?: string }[] {
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const json = JSON.parse(raw);
+    const arr: any[] = Array.isArray(json.sensors) ? json.sensors : [];
+    return arr.map((s: any) => ({ id: String(s.id), name: s.name, street: s.street, linkedLampId: s.linkedLampId }));
+  } catch { return []; }
+}
+
+function getSensorById(id: string): { id: string; name?: string; street?: string; linkedLampId?: string } | undefined {
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const json = JSON.parse(raw);
+    const arr: any[] = Array.isArray(json.sensors) ? json.sensors : [];
+    const s = arr.find((x: any) => x && x.id === id);
+    if (!s) return undefined;
+    return { id: String(s.id), name: s.name, street: s.street, linkedLampId: s.linkedLampId };
+  } catch { return undefined; }
+}
+
+function setSensorById(id: string, data: { id: string; name?: string; street?: string; linkedLampId?: string }) {
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const json = JSON.parse(raw);
+    json.sensors = Array.isArray(json.sensors) ? json.sensors : [];
+    let found = false;
+    json.sensors = json.sensors.map((s: any) => {
+      if (s && s.id === id) { found = true; return { ...s, ...data }; }
+      return s;
+    });
+    if (!found) json.sensors.push({ ...data });
+    fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
+  } catch {}
+}
+
+function getCombinedGraph(): GraphData {
+  const g = backend.getGraph();
+  const nodes = [...g.nodes];
+  const edges = [...g.edges];
+  // Merge sensors as nodes and edges to linked lamps
+  const ss = getAllSensors();
+  ss.forEach((s) => {
+    const street = typeof s.street === "string" ? s.street : "";
+    nodes.push({ id: s.id, street });
+    if (s.linkedLampId) {
+      // Use a distinct edge type for sensor links for UI styling
+      edges.push({ from: s.id, to: s.linkedLampId, type: "sensor_link" } as any);
+    }
+  });
+  return { nodes, edges } as GraphData;
+}
+
 function generateHexId(len = 8): string {
   let s = "";
   for (let i = 0; i < len; i++) s += Math.floor(Math.random() * 16).toString(16);
@@ -398,7 +493,9 @@ lampWss.on("connection", (wsRaw: WebSocket, req: any) => {
           : JSON.stringify(data);
       let outType: any = undefined;
       try { outType = JSON.parse(payloadStr)?.type; } catch { }
-      console.log(`[lamp-ws OUT] id=${currentId ?? '-'} type=${outType ?? '-'} data=${payloadStr}`);
+      if (outType !== 'ping') {
+        console.log(`[lamp-ws OUT] id=${currentId ?? '-'} type=${outType ?? '-'} data=${payloadStr}`);
+      }
     } catch { }
     return __originalSend(data as any, ...args as any);
   }) as any;
@@ -416,7 +513,9 @@ lampWss.on("connection", (wsRaw: WebSocket, req: any) => {
         inType = parsed?.type;
         idForLog = idForLog || parsed?.id;
       } catch { }
-      console.log(`[lamp-ws IN] id=${idForLog ?? '-'} type=${inType ?? '-'} data=${txt}`);
+      if (inType !== 'ping') {
+        console.log(`[lamp-ws IN] id=${idForLog ?? '-'} type=${inType ?? '-'} data=${txt}`);
+      }
     } catch { }
     try {
       const msg = JSON.parse(raw.toString());
@@ -594,22 +693,161 @@ lampServer.listen(LAMP_WS_PORT, () => {
   console.log(`Lamp WebSocket listening on ws://localhost:${LAMP_WS_PORT}`);
 });
 
+// Sensor WS handling
+type SensorWS = WebSocket & { isAlive?: boolean };
+sensorWss.on("connection", (wsRaw: WebSocket, req: any) => {
+  const ws = wsRaw as SensorWS;
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
+  try {
+    const ip = req?.socket?.remoteAddress ?? req?.connection?.remoteAddress ?? "-";
+    console.log(`[sensor-ws CONNECT] ip=${ip}`);
+  } catch { }
+
+  // Debug: wrap outbound sends for this sensor socket
+  const __originalSend = ws.send.bind(ws);
+  (ws as any).send = ((data: any, ...args: any[]) => {
+    try {
+      const currentId = sensorAuthBySocket.get(ws);
+      const payloadStr = typeof data === "string"
+        ? data
+        : Buffer.isBuffer(data)
+          ? data.toString()
+          : JSON.stringify(data);
+      let outType: any = undefined;
+      try { outType = JSON.parse(payloadStr)?.type; } catch { }
+      if (outType !== 'ping') {
+        console.log(`[sensor-ws OUT] id=${currentId ?? '-'} type=${outType ?? '-'} data=${payloadStr}`);
+      }
+    } catch { }
+    return __originalSend(data as any, ...args as any);
+  }) as any;
+
+  ws.on("message", (raw: Buffer) => {
+    ws.isAlive = true;
+    // Debug: log inbound sensor messages
+    try {
+      const txt = raw.toString();
+      const currentId = sensorAuthBySocket.get(ws);
+      let inType: any = undefined;
+      let idForLog: any = currentId;
+      try {
+        const parsed = JSON.parse(txt);
+        inType = parsed?.type;
+        idForLog = idForLog || parsed?.id;
+      } catch { }
+      if (inType !== 'ping') {
+        console.log(`[sensor-ws IN] id=${idForLog ?? '-'} type=${inType ?? '-'} data=${txt}`);
+      }
+    } catch { }
+    try {
+      const msg = JSON.parse(raw.toString());
+      // Request unique sensor ID
+      if (msg && msg.type === "request_sensor_id") {
+        let id = generateHexId(8);
+        let guard = 0;
+        while (isIdInUse(id) && guard++ < 1000) id = generateHexId(8);
+        ws.send(JSON.stringify({ type: "assigned_sensor_id", id }));
+        ensureSettingsSensorExists(id);
+        broadcastLampStates();
+        return;
+      }
+      // Authorize sensor connection
+      if (msg && msg.type === "authorize_sensor" && typeof msg.id === "string") {
+        const id = msg.id;
+        const existing = sensorClients.get(id);
+        if (existing && existing.ws !== ws) { try { existing.ws.close(); } catch { } sensorClients.delete(id); }
+        sensorClients.set(id, { id, ws });
+        sensorAuthBySocket.set(ws, id);
+        ensureSettingsSensorExists(id);
+        ws.send(JSON.stringify({ type: "authorized_sensor", id }));
+        broadcastDeviceStatus();
+        return;
+      }
+      // Sensor activation event
+      if (msg && msg.type === "sensor_activate" && typeof msg.id === "string") {
+        const authId = sensorAuthBySocket.get(ws);
+        if (!authId || authId !== msg.id) {
+          ws.send(JSON.stringify({ type: "error", code: "unauthorized_id", message: "ID mismatch for this sensor connection" }));
+          return;
+        }
+        const s = getSensorById(msg.id);
+        if (!s || !s.linkedLampId) {
+          ws.send(JSON.stringify({ type: "error", code: "no_link", message: "Sensor not linked to a lamp" }));
+          return;
+        }
+        const linked = (engine as any).lamps.get(s.linkedLampId) as Lamp | undefined;
+        if (!linked || !linked.street) {
+          ws.send(JSON.stringify({ type: "error", code: "no_street", message: "Linked lamp has no assigned street" }));
+          return;
+        }
+        backend.activateStreet(linked.street, { spillover: true, on: true });
+        broadcastLampStates();
+        // Notify UI explicitly
+        try {
+          const uiPayload = JSON.stringify({ type: "street_activated", street: linked.street });
+          wss.clients.forEach((client: WebSocket) => { try { client.send(uiPayload); } catch { } });
+        } catch { }
+        // Notify affected lamp devices
+        const events = engine.getEvents();
+        const last = events[events.length - 1] as any;
+        if (last && last.type === "street_activated" && Array.isArray(last.affectedLampIds)) {
+          notifyDeviceActivation(last.affectedLampIds);
+          try {
+            if (ACTIVATION_DURATION_MS) {
+              last.affectedLampIds.forEach((lid: string) => {
+                const existing = autoOffTimers.get(lid);
+                if (existing) { try { clearTimeout(existing); } catch {} }
+                const t = setTimeout(() => { try { engine.setLampState(lid, { on: false, brightness: 0, color: "#ffffff" }); broadcastLampStates(); } catch {} }, ACTIVATION_DURATION_MS);
+                autoOffTimers.set(lid, t);
+              });
+            }
+          } catch {}
+        }
+        ws.send(JSON.stringify({ type: "sensor_triggered", id: msg.id, street: linked.street }));
+        return;
+      }
+    } catch { }
+  });
+  ws.on("close", () => {
+    try {
+      for (const [id, client] of sensorClients.entries()) { if (client.ws === ws) sensorClients.delete(id); }
+      broadcastDeviceStatus();
+    } catch {}
+  });
+});
+
+sensorServer.listen(SENSOR_WS_PORT, () => {
+  console.log(`Sensor WebSocket listening on ws://localhost:${SENSOR_WS_PORT}`);
+});
+
 // Periodically print connected lamp IDs
 setInterval(() => {
   try {
-    const ids = Array.from(lampClients.keys());
-    console.log(`[lamp-ws STATUS] connected=${ids.length} ids=${ids.join(',') || '-'}`);
+    const lampIds = Array.from(lampClients.keys());
+    const sensorIds = Array.from(sensorClients.keys());
+    console.log(`[device-ws STATUS] lamps=${lampIds.length} sensors=${sensorIds.length} lampIds=${lampIds.join(',') || '-'} sensorIds=${sensorIds.join(',') || '-'}`);
   } catch {}
 }, 5000);
 
 // Periodically broadcast device_status to UI clients to ensure consistency
 setInterval(() => {
   try {
-    const connectedIds = Array.from(lampClients.keys());
+    const connectedIds = Array.from(new Set([...lampClients.keys(), ...sensorClients.keys()]));
     const payload = JSON.stringify({ type: "device_status", connectedIds });
     wss.clients.forEach((client: WebSocket) => { try { client.send(payload); } catch {} });
   } catch {}
 }, 5000);
+
+// Send JSON ping message to lamp and sensor sockets every 2 seconds
+setInterval(() => {
+  try {
+    lampWss.clients.forEach((client: WebSocket) => { try { client.send(JSON.stringify({ type: "ping", ts: Date.now() })); } catch {} });
+  } catch {}
+  try {
+    sensorWss.clients.forEach((client: WebSocket) => { try { client.send(JSON.stringify({ type: "ping", ts: Date.now() })); } catch {} });
+  } catch {}
+}, 2000);
 
 function getBroadcastAddresses() {
   const interfaces = os.networkInterfaces();
@@ -682,6 +920,17 @@ setInterval(() => {
       if (c.isAlive === false) {
         try { c.terminate(); } catch {}
         markDeadLamp(c);
+        return;
+      }
+      c.isAlive = false;
+      try { c.ping(); } catch {}
+    });
+    sensorWss.clients.forEach((client: WebSocket) => {
+      const c = client as SensorWS;
+      if (c.isAlive === false) {
+        try { c.terminate(); } catch {}
+        try { for (const [id, cli] of sensorClients.entries()) { if (cli.ws === c) sensorClients.delete(id); } } catch {}
+        broadcastDeviceStatus();
         return;
       }
       c.isAlive = false;
