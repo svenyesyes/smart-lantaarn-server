@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import LampEngine, { Lamp, ActivateStreetOptions, GraphData } from "./LampEngine.js";
+import LampEngine, { Lamp, ActivateStreetOptions, GraphData, LampState } from "./LampEngine.js";
 import Backend from "./backend.js";
 import fs from "fs";
 import os from "os";
@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 // Load lamps from JSON settings
 const settingsPath = path.join(__dirname, "../data/settings.json");
 let settingsRaw = fs.readFileSync(settingsPath, "utf-8");
-let settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; sensors?: { id: string; name?: string; street?: string; linkedLampId?: string }[]; spilloverDepth?: number; pulseColor?: string; defaultOnColor?: string; activationDurationMs?: number; sensorEdgeColor?: string };
+let settings = JSON.parse(settingsRaw) as { lamps: Lamp[]; sensors?: { id: string; name?: string; street?: string; linkedLampId?: string }[]; spilloverDepth?: number; pulseColor?: string; defaultOnColor?: string; activationDurationMs?: number; sensorEdgeColor?: string; rainbowMode?: boolean };
 // Normalize potential malformed keys from settings.json (e.g., leading space)
 if ((settings as any)[" activationDurationMs"] && !settings.activationDurationMs) {
   try { settings.activationDurationMs = Number((settings as any)[" activationDurationMs"]); } catch {}
@@ -26,6 +26,7 @@ const SPILLOVER_DEPTH: number = typeof settings.spilloverDepth === "number" ? se
 let PULSE_COLOR: string = typeof settings.pulseColor === "string" ? settings.pulseColor : "#60a5fa";
 let SENSOR_EDGE_COLOR: string = typeof settings.sensorEdgeColor === "string" ? settings.sensorEdgeColor : "#8b5cf6"; // purple default
 const ACTIVATION_DURATION_MS: number | undefined = typeof settings.activationDurationMs === "number" && settings.activationDurationMs > 0 ? settings.activationDurationMs : undefined;
+let RAINBOW_MODE: boolean = settings.rainbowMode === true;
 
 // Simple 10s cache for /settings endpoint
 let settingsCacheTime = 0;
@@ -41,6 +42,7 @@ function getSettingsCached() {
       // Update pulse color used by clients fetching /settings (does not affect engine spillover)
       PULSE_COLOR = typeof settings.pulseColor === "string" ? settings.pulseColor : PULSE_COLOR;
       SENSOR_EDGE_COLOR = typeof settings.sensorEdgeColor === "string" ? settings.sensorEdgeColor : SENSOR_EDGE_COLOR;
+      RAINBOW_MODE = settings.rainbowMode === true;
     } catch { }
     settingsCacheTime = now;
   }
@@ -49,7 +51,8 @@ function getSettingsCached() {
   const defaultOnColor = typeof settings.defaultOnColor === "string" ? settings.defaultOnColor : undefined;
   const activationDurationMs = typeof settings.activationDurationMs === "number" ? settings.activationDurationMs : undefined;
   const sensorEdgeColor = typeof settings.sensorEdgeColor === "string" ? settings.sensorEdgeColor : SENSOR_EDGE_COLOR;
-  return { spilloverDepth: spill, pulseColor: pulse, defaultOnColor, activationDurationMs, sensorEdgeColor };
+  const rainbowMode = settings.rainbowMode === true;
+  return { spilloverDepth: spill, pulseColor: pulse, defaultOnColor, activationDurationMs, sensorEdgeColor, rainbowMode };
 }
 
 const engine = new LampEngine(lamps);
@@ -174,6 +177,52 @@ app.get("/settings", (_req: Request, res: Response) => {
   res.json(getSettingsCached());
 });
 
+// Rainbow mode endpoints
+app.get("/rainbow", (_req: Request, res: Response) => {
+  try { res.json({ enabled: RAINBOW_MODE }); } catch { res.json({ enabled: false }); }
+});
+
+function applyRainbowMode(enabled: boolean) {
+  RAINBOW_MODE = !!enabled;
+  try {
+    // Persist in settings
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const json = JSON.parse(raw);
+    json.rainbowMode = RAINBOW_MODE;
+    fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2), "utf-8");
+  } catch {}
+  try {
+    // Apply per-lamp colorMode without changing on/brightness/color values
+    const g = engine.getLampGraph();
+    g.nodes.forEach((n) => {
+      (engine as any).setLampState(n.id, { colorMode: RAINBOW_MODE ? "rainbow" : undefined });
+    });
+  } catch {}
+  // Start/stop animator and optionally restore configured color on disable
+  if (RAINBOW_MODE) {
+    startRainbowTimer();
+  } else {
+    stopRainbowTimer();
+    try {
+      const g = engine.getLampGraph();
+      g.nodes.forEach((n) => {
+        const l = (engine as any).lamps.get(n.id) as Lamp | undefined;
+        if (l && l.state && l.state.on) {
+          // restore current configured color to device via full state
+          backend.sendLampStateCommand(n.id, { on: l.state.on, brightness: l.state.brightness, color: l.state.color });
+        }
+      });
+    } catch {}
+  }
+  broadcastLampStates();
+}
+
+app.post("/rainbow", (req: Request, res: Response) => {
+  const enabled = !!(req.body?.enabled);
+  applyRainbowMode(enabled);
+  res.json({ ok: true, enabled: RAINBOW_MODE });
+});
+
 // Device control: identify
 app.post("/lamps/:lampId/device/identify", (req: Request, res: Response) => {
   const lampId = req.params.lampId;
@@ -269,6 +318,55 @@ const lampClients: Map<string, LampClient> = new Map();
 const lampAuthBySocket: WeakMap<WebSocket, string> = new WeakMap();
 const autoOffTimers: Map<string, NodeJS.Timeout> = new Map();
 
+// Rainbow animator
+let rainbowTimer: NodeJS.Timeout | null = null;
+let rainbowHue = 0; // 0-359
+
+function hslToHex(h: number, s: number, l: number): string {
+  const _s = Math.max(0, Math.min(100, s)) / 100;
+  const _l = Math.max(0, Math.min(100, l)) / 100;
+  const c = (1 - Math.abs(2 * _l - 1)) * _s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = _l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; b = 0; }
+  else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  const toHex = (n: number) => Math.round((n + m) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function startRainbowTimer() {
+  if (rainbowTimer) return;
+  rainbowTimer = setInterval(() => {
+    if (!RAINBOW_MODE) return;
+    try {
+      const g = engine.getLampGraph();
+      // Spread hues across lamps for nicer banding
+      const stepPerLamp = 20; // deg offset between lamps
+      const hueStep = 8; // deg per tick
+      let idx = 0;
+      for (const n of g.nodes) {
+        const l = (engine as any).lamps.get(n.id) as Lamp | undefined;
+        if (!l || !l.state || !l.state.on) { idx++; continue; }
+        const hue = (rainbowHue + idx * stepPerLamp) % 360;
+        const color = hslToHex(hue, 100, 50);
+        // Send full state so device receives color in the state payload
+        backend.sendLampStateCommand(n.id, { on: l.state.on, brightness: l.state.brightness, color });
+        idx++;
+      }
+      rainbowHue = (rainbowHue + hueStep) % 360;
+    } catch {}
+  }, 50);
+}
+
+function stopRainbowTimer() {
+  if (rainbowTimer) { try { clearInterval(rainbowTimer); } catch {} rainbowTimer = null; }
+}
+
 // Sensor WS server
 const sensorServer = http.createServer();
 const sensorWss = new WebSocketServer({ server: sensorServer });
@@ -324,7 +422,7 @@ function ensureSettingsSensorExists(id: string) {
   } catch {}
 }
 
-function persistLampState(id: string, state: { on: boolean; brightness: number; color: string }) {
+function persistLampState(id: string, state: { on: boolean; brightness: number; color: string; colorMode?: string }) {
   try {
     const raw = fs.readFileSync(settingsPath, "utf-8");
     const json = JSON.parse(raw);
@@ -333,7 +431,7 @@ function persistLampState(id: string, state: { on: boolean; brightness: number; 
     json.lamps = json.lamps.map((l: any) => {
       if (l && l.id === id) {
         found = true;
-        const entry: any = { ...l, state: { on: !!state.on, brightness: Number(state.brightness) || 0, color: String(state.color) } };
+        const entry: any = { ...l, state: { on: !!state.on, brightness: Number(state.brightness) || 0, color: String(state.color), ...(state.colorMode ? { colorMode: String(state.colorMode) } : {}) } };
         // Compute explicit offAt timestamp for cross-restart auto-off
         if (ACTIVATION_DURATION_MS && entry.state.on) {
           entry.offAt = Date.now() + ACTIVATION_DURATION_MS;
@@ -346,7 +444,7 @@ function persistLampState(id: string, state: { on: boolean; brightness: number; 
       return l;
     });
     if (!found) {
-      const entry: any = { id, street: "", connections: [], state: { on: !!state.on, brightness: Number(state.brightness) || 0, color: String(state.color) }, name: "" };
+      const entry: any = { id, street: "", connections: [], state: { on: !!state.on, brightness: Number(state.brightness) || 0, color: String(state.color), ...(state.colorMode ? { colorMode: String(state.colorMode) } : {}) }, name: "" };
       if (ACTIVATION_DURATION_MS && entry.state.on) entry.offAt = Date.now() + ACTIVATION_DURATION_MS; else entry.offAt = undefined;
       try { if (entry.offAt) console.log(`[auto-off] offAt set for ${id} -> ${entry.offAt}`); } catch {}
       json.lamps.push(entry);
@@ -362,7 +460,7 @@ engine.setOnStateUpdated((lampId, state) => {
   if (client) {
     try {
       const payloadActivated = JSON.stringify({ type: "activated", id: lampId, state });
-      const payloadSetState = JSON.stringify({ type: "set_state", id: lampId, state });
+      const payloadSetState = JSON.stringify({ type: "state", id: lampId, state });
       client.ws.send(payloadActivated);
       client.ws.send(payloadSetState);
       console.log(`[auto-off] pushed state to ${lampId} (on=${state.on})`);
@@ -617,7 +715,7 @@ lampWss.on("connection", (wsRaw: WebSocket, req: any) => {
             const json = JSON.parse(raw);
             const desired = (Array.isArray(json.lamps) ? json.lamps : []).find((l: any) => l && l.id === id)?.state;
             if (desired && typeof desired === 'object') {
-              const st = { on: !!desired.on, brightness: Number(desired.brightness) || 0, color: typeof desired.color === 'string' ? desired.color : '#ffffff' };
+              const st: LampState = { on: !!desired.on, brightness: Number(desired.brightness) || 0, color: typeof desired.color === 'string' ? desired.color : '#ffffff', colorMode: typeof desired.colorMode === 'string' ? desired.colorMode : (RAINBOW_MODE ? 'rainbow' : undefined) };
               try { ws.send(JSON.stringify({ type: "activated", id, state: st })); } catch {}
             }
           } catch {}
@@ -831,6 +929,9 @@ setInterval(() => {
 }, 5000);
 
 // Periodically broadcast device_status to UI clients to ensure consistency
+try { if (RAINBOW_MODE) startRainbowTimer(); } catch {}
+
+
 setInterval(() => {
   try {
     const connectedIds = Array.from(new Set([...lampClients.keys(), ...sensorClients.keys()]));

@@ -111,6 +111,19 @@ main {
     background: #f1f5f9;
 }
 
+#rainbowBtn {
+    padding: 2px 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: #f9fafb;
+    cursor: pointer;
+}
+
+#rainbowBtn.active {
+    border-color: #8b5cf6;
+    background: #ede9fe;
+}
+
 #configOverlay .popup-body {
     background: #ffffff;
     border: 1px solid #e5e7eb;

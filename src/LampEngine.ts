@@ -4,6 +4,7 @@ export type LampState = {
   on: boolean;
   brightness: number;
   color: string;
+  colorMode?: string;
 };
 
 export type Lamp = {
@@ -72,6 +73,7 @@ export class LampEngine {
       on: partialState.on ?? lamp.state.on,
       brightness: partialState.brightness ?? lamp.state.brightness,
       color: partialState.color ?? lamp.state.color,
+      colorMode: partialState.colorMode ?? lamp.state.colorMode,
     };
 
     lamp.state = updated;

@@ -13,7 +13,8 @@
       "state": {
         "on": false,
         "brightness": 0,
-        "color": "#ffffff"
+        "color": "#ffffff",
+        "colorMode": "rainbow"
       },
       "name": "T1"
     },
@@ -21,12 +22,14 @@
       "id": "fa0e0c04",
       "street": "Test",
       "connections": [
-        "8348aa8d"
+        "8348aa8d",
+        "4158ec5d"
       ],
       "state": {
         "on": false,
         "brightness": 0,
-        "color": "#ffffff"
+        "color": "#ffffff",
+        "colorMode": "rainbow"
       },
       "name": "T3"
     },
@@ -40,9 +43,114 @@
       "state": {
         "on": false,
         "brightness": 0,
-        "color": "#ffffff"
+        "color": "#ffffff",
+        "colorMode": "rainbow"
       },
       "name": "T2"
+    },
+    {
+      "id": "4158ec5d",
+      "street": "Test",
+      "connections": [
+        "fa0e0c04",
+        "953ba294"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T4"
+    },
+    {
+      "id": "953ba294",
+      "street": "Test",
+      "connections": [
+        "4158ec5d",
+        "334152dc"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T5"
+    },
+    {
+      "id": "334152dc",
+      "street": "Test",
+      "connections": [
+        "953ba294",
+        "ca699ef4"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T6"
+    },
+    {
+      "id": "ca699ef4",
+      "street": "Test",
+      "connections": [
+        "334152dc",
+        "311e5b3c"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T7"
+    },
+    {
+      "id": "311e5b3c",
+      "street": "Test",
+      "connections": [
+        "ca699ef4",
+        "e0a4d891"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T8"
+    },
+    {
+      "id": "e0a4d891",
+      "street": "Test",
+      "connections": [
+        "311e5b3c",
+        "44f00aba"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T9"
+    },
+    {
+      "id": "44f00aba",
+      "street": "Test",
+      "connections": [
+        "e0a4d891"
+      ],
+      "state": {
+        "on": false,
+        "brightness": 0,
+        "color": "#ffffff",
+        "colorMode": "rainbow"
+      },
+      "name": "T10"
     }
   ],
   "sensors": [
@@ -57,5 +165,6 @@
       "linkedLampId": "09e16258",
       "name": "S2"
     }
-  ]
+  ],
+  "rainbowMode": false
 }

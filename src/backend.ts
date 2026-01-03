@@ -90,4 +90,9 @@ export default class Backend {
     // Ask device to run an identify pattern for a short time
     return this.sendToLamp(lampId, { type: "identify", id: lampId, durationMs });
   }
+
+  sendLampStateCommand(lampId: string, state: LampState) {
+    // Push full desired state to device using the state color property
+    return this.sendToLamp(lampId, { type: "state", id: lampId, state });
+  }
 }

@@ -8,6 +8,7 @@
     const canvas = document.getElementById('graphCanvas');
     const ctx = canvas.getContext('2d');
     const configureBtn = document.getElementById('configureBtn');
+    const rainbowBtn = document.getElementById('rainbowBtn');
     const configOverlay = document.getElementById('configOverlay');
     const cfgId = document.getElementById('cfgId');
     const cfgStreet = document.getElementById('cfgStreet');
@@ -188,6 +189,7 @@
     let isPanning = false;
     let drag = { id: null, startX: 0, startY: 0 };
     let dragMode = false;
+    let rainbowEnabled = false;
     const dragModeEl = document.getElementById('dragMode');
     if (dragModeEl) {
         dragModeEl.addEventListener('change', () => {
@@ -393,7 +395,19 @@
             // fill node based on current lamp state
             const state = states.find(s => s.id === n.id)?.state;
             if (state && state.on) {
-                ctx.fillStyle = state.color || '#ffffff';
+                if (state.colorMode === 'rainbow') {
+                    const grad = ctx.createLinearGradient(x, y, x + rect.w, y);
+                    grad.addColorStop(0.0, '#ff0000'); // red
+                    grad.addColorStop(0.17, '#ff7f00'); // orange
+                    grad.addColorStop(0.33, '#ffff00'); // yellow
+                    grad.addColorStop(0.5, '#00ff00'); // green
+                    grad.addColorStop(0.67, '#0000ff'); // blue
+                    grad.addColorStop(0.83, '#4b0082'); // indigo
+                    grad.addColorStop(1.0, '#8b00ff'); // violet
+                    ctx.fillStyle = grad;
+                } else {
+                    ctx.fillStyle = state.color || '#ffffff';
+                }
             } else {
                 // visually off: neutral fill regardless of last color
                 ctx.fillStyle = '#ffffff';
@@ -688,6 +702,31 @@
     resizeCanvas();
     refreshGraph();
     connectWS();
+
+    // Rainbow mode UI wiring
+    async function updateRainbowButton() {
+        try {
+            const res = await fetch('/rainbow');
+            const info = await res.json();
+            rainbowEnabled = !!(info && info.enabled);
+        } catch { rainbowEnabled = false; }
+        if (rainbowBtn) {
+            rainbowBtn.textContent = `Rainbow: ${rainbowEnabled ? 'On' : 'Off'}`;
+            rainbowBtn.classList.toggle('active', rainbowEnabled);
+        }
+    }
+    if (rainbowBtn) {
+        rainbowBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/rainbow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !rainbowEnabled }) });
+                if (res.ok) {
+                    await updateRainbowButton();
+                }
+            } catch {}
+        });
+        // initialize on load
+        updateRainbowButton();
+    }
 
     // Activate selected street via server API (simulate device-origin activation semantics)
     if (activateStreetBtn) activateStreetBtn.addEventListener('click', async () => {
