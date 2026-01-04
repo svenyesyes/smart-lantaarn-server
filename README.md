@@ -78,3 +78,41 @@ Bevat de 2D-positie van lampen en (optioneel) sensoren voor visualisatie in de U
 
 ## Licentie
 Zie de licentie-informatie in dit project of in de package metadata.
+
+## Netwerkprotocollen
+
+### UDP broadcast (auto-discovery voor lampen)
+- **Doel:** Lamp-apparaten automatisch laten ontdekken waar ze moeten verbinden.
+- **Mechanisme:** De server berekent alle lokale broadcast-adressen op basis van de actieve IPv4-netwerkinterfaces en stuurt elke 2 seconden een UDP-pakket naar poort `3091`.
+- **Bericht:** JSON-payload met minimaal `{ "type": "lamp_server_announce", "ws_port": 3090 }`.
+- **Verwachte client-actie:** Lampen die op UDP `3091` luisteren, lezen `ws_port` en maken (of houden) vervolgens een WebSocket-verbinding met `ws://<server>:3090`.
+
+### WebSocket-pakketten (overzicht)
+De server gebruikt drie WebSocket-kanalen: één voor de UI (browser), één voor lampen en één voor sensoren. Berichten zijn JSON-objecten met een `type`-veld en verdere data afhankelijk van het type.
+
+#### UI WebSocket (poort 3000)
+- **init:** `{ type: "init", graph, states, positions }` — volledige initiale snapshot.
+- **update:** `{ type: "update", graph, states, events }` — incrementele updates na acties (bijv. straatactivatie).
+- **positions:** `{ type: "positions", positions }` — bevestiging/broadcast van gewijzigde posities.
+- **device_status:** `{ type: "device_status", connectedIds }` — lijst met online apparaat-IDs (lampen + sensoren).
+- **street_activated:** `{ type: "street_activated", street }` — signaal dat een straat is geactiveerd (bijv. door een apparaat).
+
+#### Lamp WebSocket (poort 3090)
+- **request_id → assigned_id:** Lamp vraagt een ID aan: `{ type: "request_id" }`; server antwoordt met `{ type: "assigned_id", id }`.
+- **authorize → authorized:** Lamp meldt zich met ID: `{ type: "authorize", id }`; server bevestigt `{ type: "authorized", id }` en kan direct de gewenste `state` pushen.
+- **legacy register:** `{ type: "register", id }` — oudere registratiepad; gebruik bij voorkeur `request_id`/`authorize`.
+- **activated (server → lamp):** `{ type: "activated", id, state }` — stuurt gewenste/actuele toestand naar het apparaat.
+- **state (lamp → server):** `{ type: "state", id, state }` — terugkoppeling van apparaatstatus; engine/UI worden bijgewerkt.
+- **activate_street (lamp → server):** `{ type: "activate_street", id }` — triggert straatactivatie met spillover; UI en andere lampen worden geïnformeerd.
+- **error:** `{ type: "error", code, message }` — bijv. `unauthorized_id`, `no_street`.
+- **heartbeat:** Periodieke JSON-`ping` van de server: `{ type: "ping", ts }`; daarnaast gebruikt de server WebSocket `pong` events voor levenscontrole.
+
+#### Sensor WebSocket (poort 3092)
+- **request_sensor_id → assigned_sensor_id:** `{ type: "request_sensor_id" }` → `{ type: "assigned_sensor_id", id }`.
+- **authorize_sensor → authorized_sensor:** `{ type: "authorize_sensor", id }` → `{ type: "authorized_sensor", id }`.
+- **sensor_activate (sensor → server):** `{ type: "sensor_activate", id }` — triggert activatie van de gelinkte lamp/straat (met spillover), inclusief UI-notificatie.
+- **sensor_triggered (server → sensor):** `{ type: "sensor_triggered", id, street }` — bevestiging van verwerking.
+- **error:** `{ type: "error", code, message }` — bijv. `unauthorized_id`, `no_link`, `no_street`.
+- **heartbeat:** Periodieke JSON-`ping` van de server: `{ type: "ping", ts }`.
+
+Opmerking: De concrete payloadvelden (`graph`, `states`, `events`, `positions`, `state` enz.) volgen de interne datastructuren van de engine. Voor de meest actuele structuur kun je de JSON in de browserconsole inspecteren of de broncode raadplegen.
