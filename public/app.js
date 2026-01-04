@@ -392,22 +392,10 @@
             } else {
                 drawRoundedRectPath(x, y, rect.w, rect.h, radius);
             }
-            // fill node based on current lamp state
+            // fill node based on current lamp state (no rainbow gradient)
             const state = states.find(s => s.id === n.id)?.state;
             if (state && state.on) {
-                if (state.colorMode === 'rainbow') {
-                    const grad = ctx.createLinearGradient(x, y, x + rect.w, y);
-                    grad.addColorStop(0.0, '#ff0000'); // red
-                    grad.addColorStop(0.17, '#ff7f00'); // orange
-                    grad.addColorStop(0.33, '#ffff00'); // yellow
-                    grad.addColorStop(0.5, '#00ff00'); // green
-                    grad.addColorStop(0.67, '#0000ff'); // blue
-                    grad.addColorStop(0.83, '#4b0082'); // indigo
-                    grad.addColorStop(1.0, '#8b00ff'); // violet
-                    ctx.fillStyle = grad;
-                } else {
-                    ctx.fillStyle = state.color || '#ffffff';
-                }
+                ctx.fillStyle = state.color || '#ffffff';
             } else {
                 // visually off: neutral fill regardless of last color
                 ctx.fillStyle = '#ffffff';
